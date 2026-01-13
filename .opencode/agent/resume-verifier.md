@@ -1,11 +1,9 @@
 ---
-name: "Resume Verifier"
-description: "Verifies resume against playbook requirements. Runs ALL verification checks including character counts (via Bash wc -c for each bullet), structure validation, quality checks, and returns structured PASS/FAIL report."
-log_color: "Green"
-log_prefix: "[RESUME-VERIFIER]"
-model: "haiku"
+description: Verifies resume against playbook requirements. Runs ALL verification checks including character counts (via Bash wc -c for each bullet), structure validation, quality checks, and returns structured PASS/FAIL report.
+mode: subagent
+model: openai/gpt-5.2
+reasoningEffort: low
 ---
-
 # Resume Verifier Agent
 
 ## Purpose

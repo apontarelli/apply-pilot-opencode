@@ -24,10 +24,6 @@ Thumbs.db
 *.docx
 APPLICATIONS/
 
-# Personal data (never commit)
-YOUR_PROFILE/USER_PROFILE.md
-YOUR_PROFILE/USER_BULLETS.md
-
 # Keep the templates
 !YOUR_PROFILE/.gitkeep
 

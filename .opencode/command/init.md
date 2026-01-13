@@ -1,3 +1,7 @@
+---
+description: System setup and validation
+agent: build
+---
 # /init - System Setup & Validation
 
 Initialize and validate the job application automation system.
@@ -8,7 +12,7 @@ Initialize and validate the job application automation system.
 
 1. **Validates dependencies** (python3, python-docx)
 2. **Checks folder structure** (APPLICATIONS/, YOUR_PROFILE/, PLAYBOOK/)
-3. **Verifies core files** (.claude/agents/, .claude/commands/)
+3. **Verifies core files** (.opencode/agent/, .opencode/command/)
 4. **Checks user profile** (USER_PROFILE.md, USER_BULLETS.md)
 5. **Reports setup status**
 
@@ -40,8 +44,8 @@ Check these folders exist:
 - `YOUR_PROFILE/`
 - `YOUR_PROFILE/examples/`
 - `PLAYBOOK/`
-- `.claude/commands/`
-- `.claude/agents/`
+- `.opencode/command/`
+- `.opencode/agent/`
 
 ```bash
 # Verify folders
@@ -49,27 +53,27 @@ test -d "APPLICATIONS" && echo "APPLICATIONS/ exists" || echo "APPLICATIONS/ MIS
 test -d "YOUR_PROFILE" && echo "YOUR_PROFILE/ exists" || echo "YOUR_PROFILE/ MISSING"
 test -d "YOUR_PROFILE/examples" && echo "YOUR_PROFILE/examples/ exists" || echo "YOUR_PROFILE/examples/ MISSING"
 test -d "PLAYBOOK" && echo "PLAYBOOK/ exists" || echo "PLAYBOOK/ MISSING"
-test -d ".claude/commands" && echo ".claude/commands/ exists" || echo ".claude/commands/ MISSING"
-test -d ".claude/agents" && echo ".claude/agents/ exists" || echo ".claude/agents/ MISSING"
+test -d ".opencode/command" && echo ".opencode/command/ exists" || echo ".opencode/command/ MISSING"
+test -d ".opencode/agent" && echo ".opencode/agent/ exists" || echo ".opencode/agent/ MISSING"
 ```
 
 ---
 
 ### Step 3: Verify Core Files
 
-**.claude/commands/ (2 files):**
-- [x] `.claude/commands/apply.md`
-- [x] `.claude/commands/init.md`
+**.opencode/command/ (2 files):**
+- [x] `.opencode/command/apply.md`
+- [x] `.opencode/command/init.md`
 
-**.claude/agents/ (8 files):**
-- [x] `.claude/agents/application-orchestrator.md`
-- [x] `.claude/agents/jd-assessor.md`
-- [x] `.claude/agents/resume-creator.md`
-- [x] `.claude/agents/resume-verifier.md`
-- [x] `.claude/agents/coverletter-creator.md`
-- [x] `.claude/agents/coverletter-verifier.md`
-- [x] `.claude/agents/outreach-creator.md`
-- [x] `.claude/agents/outreach-verifier.md`
+**.opencode/agent/ (8 files):**
+- [x] `.opencode/agent/application-orchestrator.md`
+- [x] `.opencode/agent/jd-assessor.md`
+- [x] `.opencode/agent/resume-creator.md`
+- [x] `.opencode/agent/resume-verifier.md`
+- [x] `.opencode/agent/coverletter-creator.md`
+- [x] `.opencode/agent/coverletter-verifier.md`
+- [x] `.opencode/agent/outreach-creator.md`
+- [x] `.opencode/agent/outreach-verifier.md`
 
 **PLAYBOOK/ (6 files):**
 - [x] `PLAYBOOK/MASTER_TEMPLATE.md`
@@ -87,12 +91,12 @@ test -d ".claude/agents" && echo ".claude/agents/ exists" || echo ".claude/agent
 - [x] `YOUR_PROFILE/examples/EXAMPLE_JD.md`
 
 **Root files:**
-- [x] `CLAUDE.md`
+- [x] `AGENTS.md`
 - [x] `README.md`
 
 ```bash
 # Verify critical files
-test -f "CLAUDE.md" && echo "CLAUDE.md exists" || echo "CLAUDE.md MISSING"
+test -f "AGENTS.md" && echo "AGENTS.md exists" || echo "AGENTS.md MISSING"
 test -f "PLAYBOOK/resume_generator.py" && echo "resume_generator.py exists" || echo "resume_generator.py MISSING"
 test -f "YOUR_PROFILE/USER_PROFILE.md" && echo "USER_PROFILE.md exists" || echo "USER_PROFILE.md MISSING"
 test -f "YOUR_PROFILE/USER_BULLETS.md" && echo "USER_BULLETS.md exists" || echo "USER_BULLETS.md MISSING"
@@ -119,7 +123,7 @@ echo "USER_BULLETS.md has $BULLET_COUNT bullets (recommend 40-60)"
 
 ```bash
 # Count agents
-AGENT_COUNT=$(ls -1 .claude/agents/*.md 2>/dev/null | wc -l | tr -d ' ')
+AGENT_COUNT=$(ls -1 .opencode/agent/*.md 2>/dev/null | wc -l | tr -d ' ')
 echo "Found $AGENT_COUNT agent files (expected 8)"
 ```
 
@@ -143,14 +147,14 @@ Folder Structure:
    - YOUR_PROFILE/
    - YOUR_PROFILE/examples/
    - PLAYBOOK/
-   - .claude/commands/
-   - .claude/agents/
+   - .opencode/command/
+   - .opencode/agent/
 
 Core Files:
-   - .claude/ (10 files: 2 commands + 8 agents)
+   - .opencode/ (10 files: 2 commands + 8 agents)
    - PLAYBOOK/ (6 files)
    - YOUR_PROFILE/ (5 files: 2 user + 3 examples)
-   - CLAUDE.md
+   - AGENTS.md
    - README.md
 
 User Profile Status:
@@ -186,7 +190,7 @@ Next steps:
 **Fix:** Add your accomplishments to `YOUR_PROFILE/USER_BULLETS.md` (40-60 bullets recommended)
 
 ### Issue: Missing agent files
-**Check:** Ensure all 8 agent files exist in `.claude/agents/`
+**Check:** Ensure all 8 agent files exist in `.opencode/agent/`
 
 ---
 

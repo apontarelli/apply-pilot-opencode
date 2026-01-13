@@ -1,10 +1,11 @@
 # Job Application Automation System
 
-![Claude Code for Job Applications](assets/cc-for-job-applications.png)
+![OpenCode for Job Applications](assets/cc-for-job-applications.png)
 
 **Not a prompt. A system.**
 
-An 8-agent AI system that transforms job descriptions into complete, tailored application packages. Built with Claude Code.
+An 8-agent AI system that transforms job descriptions into complete, tailored application packages. Built with OpenCode.
+Forked and maintained by Antonio Pontarelli from the original by Shashikiran Devadiga.
 
 ---
 
@@ -72,7 +73,7 @@ Drop in a job description → Get application-ready materials:
 ## Quick Start (5 Minutes)
 
 ### Prerequisites
-- [Claude Code CLI](https://claude.ai/code)
+- [OpenCode CLI](https://opencode.ai)
 - Python 3.x
 - `pip install python-docx`
 
@@ -104,7 +105,7 @@ Edit `YOUR_PROFILE/USER_BULLETS.md`:
 
 **4. Run System (1 min)**
 ```bash
-claude
+opencode
 /apply
 # Paste job description when prompted
 ```
@@ -146,11 +147,11 @@ Led cross-functional discovery for payment reconciliation platform, facilitating
 
 ```
 OPEN_SOURCE_JOB_APPLICATION_SYSTEM/
-├── .claude/
-│   ├── commands/
+├── .opencode/
+│   ├── command/
 │   │   ├── apply.md               # /apply command
 │   │   └── init.md                # /init command
-│   └── agents/
+│   └── agent/
 │       ├── application-orchestrator.md
 │       ├── jd-assessor.md
 │       ├── resume-creator.md
@@ -179,7 +180,7 @@ OPEN_SOURCE_JOB_APPLICATION_SYSTEM/
 │       ├── EXAMPLE_USER_BULLETS.md
 │       └── EXAMPLE_JD.md
 │
-├── CLAUDE.md                      # System instructions (required)
+├── AGENTS.md                      # OpenCode instructions
 └── README.md                      # This file
 ```
 
@@ -284,7 +285,8 @@ MIT License - See [LICENSE](LICENSE)
 
 ## Credits
 
-Built by Shashikiran Devadiga using Claude Code.
+Original system built by Shashikiran Devadiga.
+OpenCode fork maintained by Antonio Pontarelli.
 
 Inspired by the belief that job searching shouldn't consume your building time.
 

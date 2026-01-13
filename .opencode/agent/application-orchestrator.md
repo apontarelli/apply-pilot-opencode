@@ -1,11 +1,10 @@
 ---
-name: "Application Orchestrator"
-description: "Autonomous execution of complete job application workflow. Spawns specialized creator/verifier agents sequentially, enforces verification gates, handles retries, and manages file conversions."
-log_color: "Violet"
-log_prefix: "[ORCHESTRATOR]"
-model: "haiku"
+description: Autonomous execution of complete job application workflow. Spawns specialized creator/verifier agents sequentially, enforces verification gates, handles retries, and manages file conversions.
+mode: subagent
+hidden: true
+model: openai/gpt-5.1-codex
+reasoningEffort: high
 ---
-
 # Application Orchestrator Agent
 
 ## Purpose
@@ -65,14 +64,14 @@ mkdir -p "[Folder Path]/[Folder Name]"
 **This step is MANDATORY - all downstream agents depend on JD.md existing.**
 
 1. **Spawn JD Assessor Agent** (use Task tool):
-   - `subagent_type`: "JD Assessor"
+   - `subagent_type`: "jd-assessor"
    - `description`: "Analyze job description and create strategic assessment"
    - `prompt`:
      ```
      You are the JD Assessor Agent.
 
      Read your agent definition file:
-     .claude/agents/jd-assessor.md
+     .opencode/agent/jd-assessor.md
 
      **Context Provided**:
      - **Company**: [company_name]
@@ -119,7 +118,7 @@ mkdir -p "[Folder Path]/[Folder Name]"
 
 **Attempt 1:**
 1. **Spawn Resume Creator Agent** (use Task tool):
-   - `subagent_type`: "Resume Creator"
+   - `subagent_type`: "resume-creator"
    - `description`: "Create resume"
    - `prompt`:
      ```
@@ -166,7 +165,7 @@ mkdir -p "[Folder Path]/[Folder Name]"
 2. **Wait for Resume Creator to complete**
 
 3. **Spawn Resume Verifier Agent** (use Task tool):
-   - `subagent_type`: "Resume Verifier"
+   - `subagent_type`: "resume-verifier"
    - `description`: "Verify resume"
    - `prompt`:
      ```
@@ -231,7 +230,7 @@ mkdir -p "[Folder Path]/[Folder Name]"
 
 **Attempt 1:**
 1. **Spawn CoverLetter Creator Agent** (use Task tool):
-   - `subagent_type`: "CoverLetter Creator"
+   - `subagent_type`: "coverletter-creator"
    - `description`: "Create cover letter"
    - `prompt`:
      ```
@@ -263,7 +262,7 @@ mkdir -p "[Folder Path]/[Folder Name]"
 2. **Wait for CoverLetter Creator to complete**
 
 3. **Spawn CoverLetter Verifier Agent** (use Task tool):
-   - `subagent_type`: "CoverLetter Verifier"
+   - `subagent_type`: "coverletter-verifier"
    - `description`: "Verify cover letter"
    - `prompt`:
      ```
@@ -313,7 +312,7 @@ mkdir -p "[Folder Path]/[Folder Name]"
 
 **Attempt 1:**
 1. **Spawn Outreach Creator Agent** (use Task tool):
-   - `subagent_type`: "Outreach Creator"
+   - `subagent_type`: "outreach-creator"
    - `description`: "Create outreach"
    - `prompt`:
      ```
@@ -343,7 +342,7 @@ mkdir -p "[Folder Path]/[Folder Name]"
 2. **Wait for Outreach Creator to complete**
 
 3. **Spawn Outreach Verifier Agent** (use Task tool):
-   - `subagent_type`: "Outreach Verifier"
+   - `subagent_type`: "outreach-verifier"
    - `description`: "Verify outreach"
    - `prompt`:
      ```

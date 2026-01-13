@@ -1,11 +1,9 @@
 ---
-name: "Outreach Creator"
-description: "Creates multi-track outreach strategy based on job source. Creates Track G (community/event source) OR Tracks A-F (job board source) with 3-tier escalation for each track."
-log_color: "Red"
-log_prefix: "[OUTREACH-CREATOR]"
-model: "opus"
+description: Creates multi-track outreach strategy based on job source. Creates Track G (community/event source) OR Tracks A-F (job board source) with 3-tier escalation for each track.
+mode: subagent
+model: openai/gpt-5.2
+reasoningEffort: medium
 ---
-
 # Outreach Creator Agent
 
 ## Purpose

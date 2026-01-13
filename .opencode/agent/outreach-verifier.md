@@ -1,11 +1,9 @@
 ---
-name: "Outreach Verifier"
-description: "Verifies outreach strategy against playbook requirements. Checks track type correctness, 3-tier escalation structure, message quality, and personalization. Returns structured PASS/FAIL report."
-log_color: "Pink"
-log_prefix: "[OUTREACH-VERIFIER]"
-model: "haiku"
+description: Verifies outreach strategy against playbook requirements. Checks track type correctness, 3-tier escalation structure, message quality, and personalization. Returns structured PASS/FAIL report.
+mode: subagent
+model: openai/gpt-5.2
+reasoningEffort: low
 ---
-
 # Outreach Verifier Agent
 
 ## Purpose
@@ -50,7 +48,7 @@ Read the outreach file and verify ALL checks based on track type. Return structu
 
 **Command** (extract track type from file):
 ```bash
-grep "^\\*\\*Track Type\\*\\*:" "APPLICATIONS/[Company]_[Role]/OUTREACH.md"
+grep "^\*\*Track Type\*\*:" "APPLICATIONS/[Company]_[Role]/OUTREACH.md"
 ```
 
 **Expected output examples**:
@@ -90,7 +88,7 @@ grep -c "^## Track" "APPLICATIONS/[Company]_[Role]/OUTREACH.md"
 
 **Command** (extract sub-track):
 ```bash
-grep "^\\*\\*Track Type\\*\\*:" "APPLICATIONS/[Company]_[Role]/OUTREACH.md"
+grep "^\*\*Track Type\*\*:" "APPLICATIONS/[Company]_[Role]/OUTREACH.md"
 ```
 
 **Expected**: One of G1, G2, G3, G4
@@ -113,7 +111,7 @@ grep "^\\*\\*Track Type\\*\\*:" "APPLICATIONS/[Company]_[Role]/OUTREACH.md"
 
 **Command** (count tier headers):
 ```bash
-grep -c "^### \\*\\*Tier [1-3]:" "APPLICATIONS/[Company]_[Role]/OUTREACH.md"
+grep -c "^### \*\*Tier [1-3]:" "APPLICATIONS/[Company]_[Role]/OUTREACH.md"
 ```
 
 **Expected**: 3 (Tier 1, Tier 2, Tier 3)
@@ -372,7 +370,7 @@ grep -c "^### Tier [1-3]" "APPLICATIONS/[Company]_[Role]/OUTREACH.md"
 
 **Command** (check for placeholders):
 ```bash
-grep -E "\\[Name\\]|\\[Company\\]|\\[Role\\]|\\[Message here\\]|\\[To be written\\]" "APPLICATIONS/[Company]_[Role]/OUTREACH.md"
+grep -E "\[Name\]|\[Company\]|\[Role\]|\[Message here\]|\[To be written\]" "APPLICATIONS/[Company]_[Role]/OUTREACH.md"
 ```
 
 **Expected**: No output (placeholders should be replaced)

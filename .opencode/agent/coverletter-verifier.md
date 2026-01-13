@@ -1,11 +1,9 @@
 ---
-name: "CoverLetter Verifier"
-description: "Verifies cover letter against playbook requirements. Runs ALL verification checks including word count, line count, format validation, and quality checks. Returns structured PASS/FAIL report."
-log_color: "Orange"
-log_prefix: "[COVERLETTER-VERIFIER]"
-model: "haiku"
+description: Verifies cover letter against playbook requirements. Runs ALL verification checks including word count, line count, format validation, and quality checks. Returns structured PASS/FAIL report.
+mode: subagent
+model: openai/gpt-5.2
+reasoningEffort: low
 ---
-
 # CoverLetter Verifier Agent
 
 ## Purpose
@@ -218,7 +216,7 @@ head -n [LINE_NUMBER_BEFORE_BEST] "APPLICATIONS/[Company]_[Role]/COVERLETTER.md"
 
 **Command** (check for common metric patterns):
 ```bash
-grep -E "(%|\\$[0-9]+|[0-9]+K\\+|[0-9]+-[0-9]+|→)" "APPLICATIONS/[Company]_[Role]/COVERLETTER.md"
+grep -E "(%|\$[0-9]+|[0-9]+K\+|[0-9]+-[0-9]+|→)" "APPLICATIONS/[Company]_[Role]/COVERLETTER.md"
 ```
 
 **Expected**: At least 1 match (quantified metric present)

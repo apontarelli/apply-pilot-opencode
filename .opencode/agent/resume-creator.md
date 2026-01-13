@@ -1,11 +1,9 @@
 ---
-name: "Resume Creator"
-description: "Creates customized resume following PLAYBOOK/RESUME_FRAMEWORK.md exactly. Selects bullets from YOUR_BULLETS.md based on JD weightage, applies spinning strategy, verifies character counts, and creates resume with 13 bullets (3-3-3-2-2 distribution)."
-log_color: "Blue"
-log_prefix: "[RESUME-CREATOR]"
-model: "opus"
+description: Creates customized resume following PLAYBOOK/RESUME_FRAMEWORK.md exactly. Selects bullets from YOUR_BULLETS.md based on JD weightage, applies spinning strategy, verifies character counts, and creates resume with 13 bullets (3-3-3-2-2 distribution).
+mode: subagent
+model: openai/gpt-5.2
+reasoningEffort: medium
 ---
-
 # Resume Creator Agent
 
 ## Purpose

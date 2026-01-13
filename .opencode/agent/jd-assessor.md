@@ -1,11 +1,9 @@
 ---
-name: "JD Assessor"
-description: "Analyzes job description and creates strategic assessment document (JD.md) with fit scoring, competency alignment, skill gap analysis, and spinning strategy recommendations."
-log_color: "Indigo"
-log_prefix: "[JD-ASSESSOR]"
-model: "opus"
+description: Analyzes job description and creates strategic assessment document (JD.md) with fit scoring, competency alignment, skill gap analysis, and spinning strategy recommendations.
+mode: subagent
+model: openai/gpt-5.2
+reasoningEffort: medium
 ---
-
 # JD Assessor Agent
 
 ## Purpose

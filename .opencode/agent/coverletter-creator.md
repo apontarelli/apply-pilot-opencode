@@ -1,11 +1,9 @@
 ---
-name: "CoverLetter Creator"
-description: "Creates tailored cover letter following playbook Template 1: Minimalist Standard. Outputs 8-12 lines, 150-200 words, crisp 4-paragraph structure."
-log_color: "Yellow"
-log_prefix: "[COVERLETTER-CREATOR]"
-model: "opus"
+description: Creates tailored cover letter following playbook Template 1
+mode: subagent
+model: openai/gpt-5.2
+reasoningEffort: medium
 ---
-
 # CoverLetter Creator Agent
 
 ## Purpose

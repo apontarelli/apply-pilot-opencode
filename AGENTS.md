@@ -1,6 +1,6 @@
-# CLAUDE.md - Job Application Automation System
+# AGENTS.md - Job Application Automation System
 
-This file provides guidance to Claude Code when working with this repository.
+This file provides guidance to OpenCode when working with this repository.
 
 ---
 
@@ -21,7 +21,7 @@ An 8-agent automation system that transforms job descriptions into complete appl
 
 ### 2. Run the System (1 min)
 ```bash
-claude
+opencode
 /apply
 # Paste job description when prompted
 ```
@@ -111,11 +111,11 @@ Use 5 metric types across 13 bullets (no format repeats more than once):
 
 ```
 OPEN_SOURCE_JOB_APPLICATION_SYSTEM/
-├── .claude/
-│   ├── commands/
+├── .opencode/
+│   ├── command/
 │   │   ├── apply.md               # /apply command
 │   │   └── init.md                # /init command
-│   └── agents/
+│   └── agent/
 │       ├── application-orchestrator.md
 │       ├── jd-assessor.md
 │       ├── resume-creator.md
@@ -151,7 +151,7 @@ OPEN_SOURCE_JOB_APPLICATION_SYSTEM/
 │       ├── EXAMPLE_USER_BULLETS.md
 │       └── EXAMPLE_JD.md
 │
-├── CLAUDE.md                      # This file (required)
+├── AGENTS.md                      # OpenCode instructions (this file)
 └── README.md                      # Setup guide
 ```
 
@@ -161,7 +161,7 @@ OPEN_SOURCE_JOB_APPLICATION_SYSTEM/
 
 - Python 3.x
 - python-docx (`pip install python-docx`)
-- Claude Code CLI
+- OpenCode CLI
 
 ---
 

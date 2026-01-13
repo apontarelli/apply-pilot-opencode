@@ -1,3 +1,7 @@
+---
+description: Agent-first application package generator
+agent: build
+---
 # /apply - Agent-First Application Package Generator
 
 Generate complete job application package using agent-based architecture with mandatory verification gates.
@@ -40,7 +44,7 @@ Command presents results to user
 
 ## PHASE 0: Clarification Questions (Bundled - Single Prompt)
 
-**You are Claude, running this command interactively. Ask ALL questions at once in a single prompt BEFORE spawning orchestrator agent.**
+**You are OpenCode, running this command interactively. Ask ALL questions at once in a single prompt BEFORE spawning orchestrator agent.**
 
 ---
 
@@ -127,7 +131,7 @@ APPLICATIONS/[Category]/[Company]_[Role]/
 
 ## PHASE 2: Sequential Agent Orchestration
 
-**You (Claude, running /apply command) will spawn each agent directly using Task tool and track state.**
+**You (OpenCode, running /apply command) will spawn each agent directly using Task tool and track state.**
 
 **CRITICAL**: Do NOT delegate to orchestrator agent. You must spawn JD Assessor, Resume Creator, Resume Verifier, Cover Letter Creator, Cover Letter Verifier, Outreach Creator, Outreach Verifier agents sequentially with explicit Task tool calls.
 
@@ -155,12 +159,12 @@ Present to user: "Creating strategic JD assessment..."
 Spawn JD Assessor Agent using Task tool:
 ```
 Task(
-  subagent_type: "general-purpose",
+  subagent_type: "jd-assessor",
   description: "Analyze job description and create JD.md",
   prompt: |
     You are the JD Assessor Agent.
 
-    Read and execute: .claude/agents/jd-assessor.md
+    Read and execute: .opencode/agent/jd-assessor.md
 
     Context:
     - Company: [company_name]
@@ -198,7 +202,7 @@ Present to user: "Creating tailored resume..."
 Spawn Resume Creator Agent:
 ```
 Task(
-  subagent_type: "general-purpose",
+  subagent_type: "resume-creator",
   description: "Create customized resume",
   prompt: |
     You are the Resume Creator Agent.
@@ -250,7 +254,7 @@ Present to user: "Verifying resume quality..."
 Spawn Resume Verifier Agent:
 ```
 Task(
-  subagent_type: "general-purpose",
+  subagent_type: "resume-verifier",
   description: "Verify resume meets all requirements",
   prompt: |
     You are the Resume Verifier Agent.
@@ -340,7 +344,7 @@ Present to user: "⚠️ {len(failing_bullets)} bullets failed verification. Reg
 **Spawn Resume Creator in PARTIAL REGENERATION mode:**
 ```
 Task(
-  subagent_type: "general-purpose",
+  subagent_type: "resume-creator",
   description: "Fix failing resume bullets (PARTIAL RETRY)",
   prompt: |
     You are the Resume Creator Agent (PARTIAL REGENERATION MODE).
@@ -386,7 +390,7 @@ Wait for completion.
 **Spawn Resume Verifier for targeted re-verification:**
 ```
 Task(
-  subagent_type: "general-purpose",
+  subagent_type: "resume-verifier",
   description: "Re-verify fixed bullets only",
   prompt: |
     You are the Resume Verifier Agent (TARGETED RE-VERIFICATION).
@@ -453,7 +457,7 @@ Present to user: "Creating cover letter..."
 Spawn CoverLetter Creator Agent:
 ```
 Task(
-  subagent_type: "general-purpose",
+  subagent_type: "coverletter-creator",
   description: "Create cover letter",
   prompt: |
     You are the CoverLetter Creator Agent.
@@ -494,7 +498,7 @@ Present to user: "Verifying cover letter..."
 Spawn CoverLetter Verifier Agent:
 ```
 Task(
-  subagent_type: "general-purpose",
+  subagent_type: "coverletter-verifier",
   description: "Verify cover letter",
   prompt: |
     You are the CoverLetter Verifier Agent.
@@ -580,7 +584,7 @@ Present to user: "Creating outreach strategy..."
 Spawn Outreach Creator Agent:
 ```
 Task(
-  subagent_type: "general-purpose",
+  subagent_type: "outreach-creator",
   description: "Create outreach",
   prompt: |
     You are the Outreach Creator Agent.
@@ -625,7 +629,7 @@ Present to user: "Verifying outreach..."
 Spawn Outreach Verifier Agent:
 ```
 Task(
-  subagent_type: "general-purpose",
+  subagent_type: "outreach-verifier",
   description: "Verify outreach",
   prompt: |
     You are the Outreach Verifier Agent.
