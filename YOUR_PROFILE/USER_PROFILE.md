@@ -15,44 +15,35 @@ Portfolio: hardsets.com
 
 ## PROFESSIONAL SUMMARY
 
-PM who turns financial-workflow complexity into scalable product systems. At Wrapbook, cut new report delivery from 2-3 months to 2-3 weeks, shipped 0-to-1 accounting infrastructure, and built platform primitives used across 10+ teams and 50,000+ users.
+Senior Product Manager who turns complex operational workflows into products customers trust and businesses can scale. Strongest proof: opened film/TV accounting at Wrapbook, cut new report delivery from 2-3 months to 2-3 weeks, and shaped cross-org systems for reporting, data surfaces, identity, and high-trust financial operations.
 
 ---
 
 ## CORE EXPERTISE
 
-**Platform Product Leadership**  
-Building reusable product primitives (data infrastructure, reporting layers, UI systems) enabling multiple teams to ship complex workflows faster.
+**Fintech / Financial Systems**  
+Accounting and payroll workflows, reporting systems, reconciliation, validation controls, workers comp, close-ready financial operations.
 
-**Financial Systems & Data Platforms**  
-Designing ledger-adjacent systems, financial reporting infrastructure, and high-correctness workflows for accounting and finance operations.
+**Platform / Shared Product Systems**  
+Reporting frameworks, exports pipelines, identity and access, internal operations workflows, demo and evaluation environments, shared product primitives used across teams.
 
-**Design Systems & Product Foundations**  
-Bridging design systems and engineering implementation to scale UI primitives across product surfaces and teams.
+**Technical Fluency**  
+System architecture, API contracts, data modeling, SQL, server/client tradeoffs, workflow state management, local-first architecture, sync engines.
 
-**AI Product Strategy**  
-Translating AI capabilities into controlled product features using evaluation frameworks, safety guardrails, and structured outputs.
+**AI Product**  
+AI workflow design, natural-language workflows, multimodal extraction, structured JSON outputs, schema validation, AI evals, human-in-the-loop review workflows, and guardrails for high-trust AI use cases in production software.
 
-**Data-Dense Product UX**  
-Designing spreadsheet-like interfaces and high-trust financial workflows requiring precision interaction design and strong data validation.
+**Senior+ Scope**  
+Cross-org strategy, standards-setting, and roadmap ownership across data-heavy product surfaces; title stays Senior PM, scope can read staff-level through outcomes and shared-system influence.
 
----
-
-## AI + DESIGN SYSTEMS (Frontend Platform, embedded with Design)
-
-**FRONTEND PLATFORM TEAM (Sep 2023–Jan 2026):**
-
-- Embedded product team partnered directly with Design and Engineering to scale UI foundations across the platform
-- Owned company Figma component library underpinning the design system
-- Scaled design-system primitives used across 10+ product teams
-- Led design AI strategy integrating Figma Make into product development workflows
-- Shipped MCP tooling enabling agent-accessible design system primitives
+**Onboarding / Access Context**  
+Antonio owned product strategy and requirements for company/project setup at Wrapbook, including dependency mapping across hiring, startwork, employee management, payroll / hours-to-gross calculations, workers comp, and accounting. He later helped establish the reusable multi-step setup pattern in the design system, but should not claim end-to-end rollout ownership for the original project setup refactor.
 
 **METRIC GUIDANCE**
 
 Engineering organization scope: **30+ engineers** (project-specific initiatives such as accounting MVP)
 
-Platform/design-system coverage: **10+ product teams** (UI foundations and shared components)
+Cross-org coverage: **10+ product teams** (shared UI foundations and platform-level product systems)
 
 Reporting platform scope: **~10 live reports** (reporting platform, exports hub, NLQ)
 
@@ -66,6 +57,20 @@ Always specify which metric you are referencing.
 
 ---
 
+## BASE RESUME GUIDANCE
+
+- Maintain reusable base resumes in `YOUR_PROFILE/Fintech/FINTECH.md`, `YOUR_PROFILE/AI/AI.md`, `YOUR_PROFILE/Access/ACCESS.md`, `YOUR_PROFILE/MEDIA_PLATFORM.md`, and `YOUR_PROFILE/DESIGN.md`
+- Maintain LinkedIn copy in `YOUR_PROFILE/LINKEDIN_PROFILE.md` and keep it aligned to the strongest current resume language
+- Career lane strategy and sequencing live in `YOUR_PROFILE/CAREER_STRATEGY.md`
+- `FINTECH.md` is the current strongest source of truth for positioning, wording, and proof hierarchy
+- `ACCESS.md` is the preferred variant for identity, access management, employee onboarding/offboarding, access reviews, compliance operations, and trust-management workflow roles
+- In fintech resumes, lead with payroll, accounting, reporting, controls, platform, and trust; let film/TV context trail unless it adds proof
+- Hard Sets should live under a separate `SIDE PROJECTS` section when used
+- Prefer distinct proof over padding; 13 bullets is a useful target, not a reason to add filler
+- Use `ACTIVE` bullets first from `USER_BULLETS.md`; only pull from `ON ICE / REVIEW LATER` when the lane clearly benefits
+
+---
+
 ## WORK EXPERIENCE
 
 ### Hard Sets
@@ -73,12 +78,14 @@ Always specify which metric you are referencing.
 Founder / Product Builder (Side Project)  
 2024–Present | Los Angeles, CA
 
-Architecting a local-first workout tracking product focused on instant logging, offline reliability, and AI-assisted development workflows.
+Use as proof of AI-native product building: Antonio owns strategy, requirements, UAT, and delivery while agents handle spec expansion, implementation, review, and browser-based smoke testing through a repeatable build loop.
 
 Focus Areas:
 
-- Architected a local-first workout logging PWA around SQLite/WASM, enabling offline-first usage and sub-second logging without backend dependencies.
-- Built and shipped the product end-to-end as a solo PM/builder using AI-assisted development tools, compressing iteration loops while owning product, code, releases, and quality.
+- Local-first product architecture, sync, auth, reliability, and release quality
+- AI workout import spanning multimodal extraction, deterministic normalization, confidence-based review routing, and eval-driven quality tuning
+- AI-native build loop across requirements, technical planning, implementation, review, and browser-based smoke testing
+- Product judgment stays human-led across strategy, prioritization, UAT, and delivery decisions
 
 ---
 
@@ -87,14 +94,15 @@ Focus Areas:
 Senior Product Manager I  
 Sep 2023–Jan 2026 | Remote
 
-Frontend platform and financial reporting product leadership for a payroll and accounting platform used across film and television production finance.
+Senior PM scope across reporting, tabular data surfaces, shared product systems, and AI workflows for a payroll and accounting platform.
 
 Focus Areas:
 
-- Standardized spreadsheet-style grid primitives across timecards, AP, journal entries, payroll, GL, and reconciliation workflows.
-- Built a reusable reporting platform powering ~10 reports and cutting new report delivery from ~2-3 months to ~2-3 weeks.
-- Shipped an exports hub with background processing and retries, reducing timeout-prone report generation and support friction.
-- Defined the roadmap to replace bespoke reporting builds with reusable data primitives and self-serve reporting surfaces.
+- Closed major product gaps in accounting and payroll reporting for film/TV prospects
+- Reduced one of the largest support issues in reporting by making exports reliable and self-serve
+- Built reusable reporting systems that cut new report delivery from ~2-3 months to ~2-3 weeks
+- Owned cross-org strategy for tabular data surfaces spanning reporting, payroll, and onboarding
+- Introduced natural-language reporting that converted user prompts into schema-validated report configs, using constrained parameters and eval sets to reach >95% accuracy without exposing raw LLM output to users
 
 ---
 
@@ -103,15 +111,15 @@ Focus Areas:
 Product Manager  
 Mar 2022–Sep 2023 | Remote
 
-Product leadership for accounting and financial infrastructure powering payroll and production finance workflows.
+0-to-1 accounting and financial infrastructure product leadership for Wrapbook's move into film/TV finance.
 
 Focus Areas:
 
-- Shipped a 0-to-1 double-entry accounting MVP with posting rules, validation controls, and fund-flow workflows across a 30-engineer organization.
-- Launched General Ledger and Trial Balance reports that enabled accurate close workflows and audit-ready records.
-- Built a bank balance widget that moved cash visibility into core product workflows for finance teams.
-- Implemented a 50-state workers compensation engine processing millions in annual premiums with strict validation controls.
-- Led MFA rollout and Auth0 migration that hardened platform security for 50,000+ users after security incidents.
+- Shipped a 0-to-1 accounting product spanning setup, bank visibility, dashboard, and close workflows across a 30+ engineer effort
+- Protected trust and payroll continuity with MFA rollout and Auth0 migration for 50,000+ active users
+- Owned company/project setup strategy and requirements, mapping setup-state dependencies across hiring, startwork, employee management, payroll / hours-to-gross calculations, workers comp, and accounting
+- Protected a major profit center through 50-state workers comp billing accuracy and stronger operational controls
+- GL/TB and bank-balance specifics are supporting proofs; use them only when a role needs narrower accounting-detail emphasis
 
 ---
 
@@ -120,12 +128,12 @@ Focus Areas:
 Production Accounting & Finance Lead  
 2011–2022 | Los Angeles, CA
 
-Finance leadership across film and television productions responsible for payroll audits, financial reconciliation, and compliance with union agreements.
+Operational finance leadership across film and television productions with direct accountability for payroll accuracy, audit readiness, and compliance under high schedule and budget pressure.
 
 Focus Areas:
 
-- Ran weekly SAG payroll audits reconciling complex talent payments across active productions.
-- Authored production finance protocols that helped Netflix's *Selena: The Series* resume filming after a 5-month shutdown.
+- SAG payroll audit and talent-pay accuracy under union scrutiny
+- Finance protocols and restart planning for large-scale productions under COVID constraints
 
 ---
 
@@ -139,28 +147,31 @@ Lloyd Greif Center for Entrepreneurship
 
 ## SKILLS
 
-Financial systems: double-entry accounting, GL/TB reporting, reconciliation workflows, validation controls, chart of accounts, fund flows
+Financial Product: accounting and payroll workflows, reporting systems, reconciliation, workers comp, validation controls
 
-Technical: SQL, data modeling, Rails/Hotwire, TypeScript, SQLite/WASM, exports pipelines, background jobs
+Platform: reporting frameworks, exports pipelines, identity / access, internal operations workflows, demo and evaluation environments
 
-Product: platform strategy, 0-to-1 product development, cross-functional leadership, customer discovery, roadmap planning
+Technical Depth: system architecture, API contracts, data modeling, SQL, server/client tradeoffs, workflow state management, local-first architecture, sync engines
 
-AI/LLM: prompt design, eval cases, structured outputs, safety guardrails, MCP tooling, Claude Code, Codex, OpenCode, Cursor, Figma Make
-
-Design systems: component APIs, design-to-engineering collaboration, design system governance
+AI Product: AI workflow design, natural-language workflows, multimodal extraction, structured outputs, AI evals, human-in-the-loop review workflows, guardrails
 
 ---
 
 ## NOTES
 
 - Deep domain expertise in entertainment payroll and production finance
-- Strong platform and foundations product experience
+- Additional entertainment/media credibility: nearly 20 years as a recording artist and producer; use selectively for media, creator, music, or production-software roles
+- Lifelong gamer with roughly 30 years of player experience and strong interest in game development; use selectively for games roles in cover letters and application answers, not as a substitute for shipped games PM proof
+- Strong platform and shared-systems product experience
 - Builder mindset with hands-on technical fluency
+- Best recruiter story: Senior PM with staff-level scope, not a principal title claim
 - Background as professional musician (Carnegie Hall soloist)
 
 ---
 
 ## RESUME DISTRIBUTION
 
-Roles: 4  
-Bullet distribution: 2-5-4-2
+Primary professional roles: 3  
+Optional side-project section: 1  
+Fintech base structure: 5-3-2 + 2 side-project bullets  
+Tailored resumes: aim for 13 total bullets only when every bullet earns its spot

@@ -1,0 +1,11 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+
+[mcp_servers.linkedin]
+command = "uvx"
+args = ["linkedin-scraper-mcp@latest"]
+startup_timeout_sec = 20
+tool_timeout_sec = 90
+enabled_tools = ["search_jobs", "get_job_details", "get_company_profile", "search_people"]
+
+[mcp_servers.linkedin.env]
+UV_HTTP_TIMEOUT = "300"

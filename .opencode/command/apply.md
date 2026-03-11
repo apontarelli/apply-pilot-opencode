@@ -15,7 +15,7 @@ Generate complete job application package using agent-based architecture with ma
 **Generates**:
 1. Strategic JD assessment (fit scoring, competency alignment, spinning recommendations)
 2. Tailored resume (bullets per USER_PROFILE.md distribution, 240-260 chars each)
-3. Cover letter (8-12 lines, 150-200 words, Template 1 Minimalist)
+3. Cover letter (proof-first short note, target 100-140 words)
 4. Outreach strategy (Track G OR Tracks A-F with 3-tier escalation)
 
 **All files DOCX-converted** (Resume.docx, Coverletter.docx) after verification passes.
@@ -462,24 +462,24 @@ Task(
   prompt: |
     You are the CoverLetter Creator Agent.
 
-    Read and follow: PM PLAYBOOK/03_COVERLETTER.md (280 lines - READ COMPLETELY FIRST)
+    Read and follow: PLAYBOOK/COVERLETTER_FRAMEWORK.md
     Read JD analysis: APPLICATIONS/[Category]/[Company]_[Role]/JD.md
 
     Your task:
-    1. Research company hook (from JD, news, LinkedIn)
+    1. Choose the strongest truthful hook from the JD, feature area, workflow, or company direction
     2. Select strongest relevant achievement with quantified outcome
-    3. Write 4-paragraph structure (Hook → Value → Alignment → CTA)
-    4. Use Template 1: Minimalist (lines 94-114 in playbook)
-    5. Compress to 8-12 lines, 150-200 words (crisp, no fluff)
+    3. Draft a concise proof-first note
+    4. Use the canonical cover-letter template from PLAYBOOK/COVERLETTER_FRAMEWORK.md
+    5. Write a sharp 3-paragraph note; target 100-140 words, acceptable 90-150
     6. Use Write tool to create: APPLICATIONS/[Category]/[Company]_[Role]/COVERLETTER.md
 
     MANDATORY REQUIREMENTS:
-    - 8-12 lines total
-    - 150-200 words
-    - Template 1 Minimalist format
-    - No formal headers (no "Re:", no H2 section titles)
-    - 4 simple paragraphs: Hook → Value → Alignment → CTA
-    - Casual but professional tone
+    - 3 short paragraphs
+    - 90-150 body words, aiming for 100-140
+    - Specific hook + concrete proof + concrete contribution area
+    - No formal headers or greeting
+    - No fake enthusiasm, gimmicky CTA language, or abstract filler
+    - Plainspoken, slightly casual tone
 
     Create the file and report completion.
 )
@@ -507,28 +507,32 @@ Task(
 
     Verify ALL checks:
 
-    1. Word Count Verification:
-       - Count total words (use Bash: wc -w)
-       - Verify: 150 <= count <= 200
+    1. Body Word Count Verification:
+       - Count body words with Bash
+       - Verify hard pass: 90 <= count <= 150
+       - Flag if outside target range 100-140
 
-    2. Line Count Verification:
-       - Count content lines (exclude empty lines)
-       - Verify: 8 <= count <= 12
+    2. Structure Verification:
+       - Prefer 3 short paragraphs
+       - Accept 2-4 if concise
+       - No formal headers ("Re:", "Dear", H2 titles, etc.)
 
-    3. Structure Verification:
-       - 4 paragraphs present (Hook, Value, Alignment, CTA)
-       - No formal headers ("Re:", H2 titles, etc.)
-       - Template 1 format followed
+    3. Content Verification:
+       - Specific hook in opening
+       - At least one concrete proof point with explicit number and business result
+       - Concrete contribution area in closing
+       - Plainspoken tone without abstract filler
+       - No fake enthusiasm or template-speak
 
     Return structured report:
     ```
     OVERALL: [PASS/FAIL]
 
-    Word Count: [X] words [PASS/FAIL]
-    Line Count: [X] lines [PASS/FAIL]
-    Structure: 4 paragraphs [PASS/FAIL]
-    No Formal Headers: [PASS/FAIL]
-    Template 1 Format: [PASS/FAIL]
+    Body Word Count: [X] words [PASS/FAIL]
+    Structure: [PASS/FAIL]
+    Format: [PASS/FAIL]
+    Proof + Metric: [PASS/FAIL]
+    Tone: [PASS/FAIL]
     ```
 
     If ANY check fails, OVERALL = FAIL.
@@ -707,7 +711,7 @@ Files Created:
    - All bullets 240-260 characters
 
 3. COVERLETTER.md → Coverletter.docx
-   [If requires_cover_letter=true]: (VERIFIED ✓) - 8-12 lines, 150-200 words
+   [If requires_cover_letter=true]: (VERIFIED ✓) - proof-first short note, 90-150 words
    [If requires_cover_letter=false]: ⏭️ SKIPPED (not required by job posting)
 
 4. OUTREACH.md

@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import re
 from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
@@ -22,6 +23,34 @@ def set_calibri_font(run, size_pt, bold=False, italic=False):
     rFonts.set(qn('w:cs'), 'Calibri')
 
 
+def clean_markdown_text(text):
+    """Strip simple markdown formatting used in cover letter files."""
+    text = re.sub(r'^\s*#+\s+', '', text)
+    text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
+    text = re.sub(r'\*(.*?)\*', r'\1', text)
+    return text.strip()
+
+
+def extract_body_paragraphs(content):
+    """Return only real cover-letter paragraphs, skipping markdown scaffolding."""
+    paragraphs = []
+
+    for raw_paragraph in content.split('\n\n'):
+        paragraph = raw_paragraph.strip()
+        if not paragraph:
+            continue
+        if re.fullmatch(r'-{3,}', paragraph):
+            continue
+        if paragraph.startswith('#'):
+            continue
+
+        cleaned = clean_markdown_text(paragraph)
+        if cleaned:
+            paragraphs.append(cleaned)
+
+    return paragraphs
+
+
 def create_cover_letter_from_markdown(md_file_path, output_path):
     with open(md_file_path, 'r', encoding='utf-8') as f:
         content = f.read()
@@ -34,7 +63,7 @@ def create_cover_letter_from_markdown(md_file_path, output_path):
         section.left_margin = Inches(1.0)
         section.right_margin = Inches(1.0)
 
-    paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
+    paragraphs = extract_body_paragraphs(content)
 
     for para_text in paragraphs:
         para = doc.add_paragraph()

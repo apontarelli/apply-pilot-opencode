@@ -241,20 +241,19 @@ mkdir -p "[Folder Path]/[Folder Name]"
      Read JD analysis: [Folder Path]/JD.md
 
      Your task:
-     1. Research company hook (from JD, news, LinkedIn)
+     1. Choose the strongest truthful hook from the JD, feature area, workflow, or company direction
      2. Select strongest relevant achievement with quantified outcome
-     3. Write 4-paragraph structure (Hook → Value → Alignment → CTA)
-     4. Use Template 1: Minimalist
-     5. Compress to 8-12 lines, 150-200 words (crisp, no fluff)
+     3. Write the canonical proof-first cover letter from PLAYBOOK/COVERLETTER_FRAMEWORK.md
+     4. Use 3 short paragraphs
+     5. Target 100-140 body words; stay within 90-150
      6. Use Write tool to create: [Folder Path]/COVERLETTER.md
 
      MANDATORY REQUIREMENTS:
-     - 8-12 lines total
-     - 150-200 words
-     - Template 1 Minimalist format
-     - No formal headers (no "Re:", no H2 section titles)
-     - 4 simple paragraphs: Hook → Value → Alignment → CTA
-     - Casual but professional tone
+     - specific hook + concrete proof + clear first contribution area
+     - no formal headers or greeting
+     - no fake enthusiasm or gimmicky CTA
+     - plainspoken, slightly casual, recruiter-grade tone
+     - no abstract filler or AI-ish phrasing
 
      Create the file and report completion.
      ```
@@ -272,18 +271,21 @@ mkdir -p "[Folder Path]/[Folder Name]"
 
      Verify ALL checks and return structured report:
 
-     **1. Word Count Verification:**
-     - Count total words (use Bash: `wc -w "[Folder Path]/COVERLETTER.md"`)
-     - Verify: 150 <= count <= 200
+     **1. Body Word Count Verification:**
+     - Count body words with shell commands
+     - Hard pass: 90 <= count <= 150
+     - Flag if outside target range 100-140
 
-     **2. Line Count Verification:**
-     - Count content lines (exclude empty lines)
-     - Verify: 8 <= count <= 12
+     **2. Structure + Format Verification:**
+     - Prefer 3 short paragraphs; accept 2-4 if concise
+     - No formal headers ("Dear", "Re:", H2 titles, etc.)
 
-     **3. Structure Verification:**
-     - 4 paragraphs present (Hook, Value, Alignment, CTA)
-     - No formal headers ("Re:", H2 titles, etc.)
-     - Template 1 format followed
+     **3. Content Verification:**
+     - Specific hook
+     - Concrete proof point with an explicit number and business result
+     - Concrete contribution area
+     - Plainspoken tone without abstract filler
+     - No fake enthusiasm or template-speak
 
      Return structured report with OVERALL: [PASS/FAIL]
      ```
@@ -415,10 +417,10 @@ Resume:
   - Clean role titles ✓
 
 Cover Letter:
-  - 8-12 lines ✓
-  - 150-200 words ✓
-  - Template 1 Minimalist format ✓
-  - No formal headers ✓
+  - proof-first short note ✓
+  - 90-150 body words ✓
+  - specific hook + concrete proof + contribution area ✓
+  - plainspoken tone; no formal headers or abstract template-speak ✓
 
 Outreach:
   - Track [Type] ✓

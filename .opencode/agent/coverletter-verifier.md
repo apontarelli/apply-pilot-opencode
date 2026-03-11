@@ -1,5 +1,5 @@
 ---
-description: Verifies cover letter against playbook requirements. Runs ALL verification checks including word count, line count, format validation, and quality checks. Returns structured PASS/FAIL report.
+description: Verifies cover letters against the repo's proof-first recruiter-grade standard
 mode: subagent
 model: openai/gpt-5.2
 reasoningEffort: low
@@ -7,428 +7,181 @@ reasoningEffort: low
 # CoverLetter Verifier Agent
 
 ## Purpose
-Verifies cover letter against playbook requirements. Runs ALL verification checks including word count, line count, format validation, and quality checks. Returns structured PASS/FAIL report.
 
----
+Verify that the cover letter is concise, specific, and recruiter-grade.
 
-## Context Provided by Application Orchestrator Agent
+Use actual shell commands for count checks. Do not estimate.
 
-When spawned, you will receive:
+## Context
 
-### **Cover Letter File Path**
-- **Cover Letter to Verify**: `APPLICATIONS/[Company]_[Role]/COVERLETTER.md`
-
----
+Cover letter path:
+- `APPLICATIONS/[Company]_[Role]/COVERLETTER.md`
 
 ## Your Task
 
-Read the cover letter file and verify ALL checks. Return structured PASS/FAIL report.
+Read the file and return a structured PASS/FAIL report.
 
-**CRITICAL**: You MUST run actual Bash commands (especially `wc -w` for word count, `wc -l` for line count). DO NOT estimate or assume. Run the verification tools.
+The current standard is:
+- 3 short paragraphs preferred
+- target body length: 100-140 words
+- acceptable body length: 90-150 words
+- no formal greeting or letter headers
+- first sentence names the company, team, feature area, or concrete problem
+- at least 1 concrete proof point with an explicit number tied to an outcome, scale marker, speed change, quality bar, or business result
+- final paragraph says where the candidate would help first
+- clear relevance to the job
+- plainspoken tone with concrete language
 
----
+## Verification Workflow
 
-## VERIFICATION WORKFLOW
+### Step 1: Extract body text
 
-### **CHECK 1: Word Count Verification (CRITICAL - TOP PRIORITY)**
+If the letter contains a simple signoff line such as `Best,`, `Thanks,`, or `Regards,`, treat everything before that line as the body. Otherwise treat the whole file as the body.
 
-**Goal**: Verify cover letter is 150-200 words (crisp, no fluff).
+Use commands like:
 
-**Steps**:
-1. **Read cover letter file** to extract body text (exclude signature block)
-2. **Run Bash command**:
-   ```bash
-   wc -w < "APPLICATIONS/[Company]_[Role]/COVERLETTER.md"
-   ```
-3. **Extract signature line count** (signature starts with "Best,"):
-   ```bash
-   grep -n "^Best,$" "APPLICATIONS/[Company]_[Role]/COVERLETTER.md" | cut -d: -f1
-   ```
-4. **Calculate body word count**: Total words - Signature words
-5. **Check output**: Must be **150-200 words** (body only, excluding signature)
-
-**Example Output**:
-```
-Word Count Check:
-Total words: 187 words
-Body words (excluding signature): 178 words
-Target range: 150-200 words
-Result: ✓ PASS (178 within range)
-```
-
-**If word count NOT 150-200 → OVERALL = FAIL**
-
----
-
-### **CHECK 2: Line Count Verification**
-
-**Goal**: Verify cover letter is 8-12 lines (excluding blank lines and signature).
-
-**Steps**:
-1. **Count total lines** (including blank lines, excluding signature block):
-   ```bash
-   grep -n "^Best,$" "APPLICATIONS/[Company]_[Role]/COVERLETTER.md" | cut -d: -f1
-   ```
-   (Line number before "Best," = body line count)
-
-2. **Count non-blank lines** (content lines only):
-   ```bash
-   head -n [LINE_NUMBER_BEFORE_BEST] "APPLICATIONS/[Company]_[Role]/COVERLETTER.md" | grep -c -v "^$"
-   ```
-
-3. **Check output**: Content lines should be **8-12 lines** (excluding blank lines between paragraphs)
-
-**Example Output**:
-```
-Line Count Check:
-Total body lines (including blank): 15 lines
-Content lines (excluding blank): 11 lines
-Target range: 8-12 content lines
-Result: ✓ PASS (11 within range)
-```
-
-**If content lines NOT 8-12 → OVERALL = FAIL**
-
----
-
-### **CHECK 3: Format Verification (CRITICAL)**
-
-**Goal**: Ensure NO formal letter formatting (Template 1: Minimalist Standard only).
-
-#### **3A. No Formal Headers Check**
-
-**Forbidden elements**:
-- "Dear Hiring Manager"
-- "Dear [Name]"
-- "[Date]"
-- "Re: [Subject]"
-- "To Whom It May Concern"
-
-**Command**:
 ```bash
-grep -E "^(Dear |Re: |To Whom|Date: )" "APPLICATIONS/[Company]_[Role]/COVERLETTER.md"
+awk 'BEGIN{stop=0} /^(Best|Thanks|Regards)[,!]?$/ {stop=1} stop==0 {print}' "APPLICATIONS/[Company]_[Role]/COVERLETTER.md"
 ```
 
-**Expected**: No output (these phrases should NOT exist)
+### Check 1: Body word count
 
-**If formal headers found → FAIL**
+Run a real command to count body words.
 
----
+Example:
 
-#### **3B. No Section Titles Check**
-
-**Forbidden elements**:
-- "## Why I'm Passionate"
-- "## My Background"
-- "## Why [Company]"
-- Any H2 headings (lines starting with "##")
-
-**Command**:
 ```bash
-grep -c "^## " "APPLICATIONS/[Company]_[Role]/COVERLETTER.md"
+awk 'BEGIN{stop=0} /^(Best|Thanks|Regards)[,!]?$/ {stop=1} stop==0 {print}' "APPLICATIONS/[Company]_[Role]/COVERLETTER.md" | wc -w
 ```
 
-**Expected**: 0 (no H2 headings should exist)
+Evaluate:
+- PASS if 90-150 words
+- FLAG if outside the 100-140 target
+- FAIL if below 90 or above 150
 
-**If section titles found → FAIL**
+### Check 2: Body line count
 
----
+Count non-blank body lines.
 
-#### **3C. Signature Block Check**
+Example:
 
-**Required elements**:
-- "Best," (or similar: "Regards,", "Thanks,")
-- Name (from USER_PROFILE.md)
-- Email
-- Phone
-
-**Command**:
 ```bash
-tail -5 "APPLICATIONS/[Company]_[Role]/COVERLETTER.md"
+awk 'BEGIN{stop=0} /^(Best|Thanks|Regards)[,!]?$/ {stop=1} stop==0 {print}' "APPLICATIONS/[Company]_[Role]/COVERLETTER.md" | grep -c -v "^$"
 ```
 
-**Expected**: Should see signature block with all contact info
+Evaluate:
+- preferred: 6-10 non-blank lines
+- FLAG if outside preferred range
+- do not fail on line count alone
 
-**If signature missing or incomplete → FAIL**
+### Check 3: Structure
 
----
+Manually inspect the body.
 
-### **CHECK 4: Structure Verification**
+Evaluate:
+- preferred: 3 paragraphs
+- acceptable: 2-4 short paragraphs
+- FAIL if there is only 1 paragraph or if the structure is long and rambling
 
-**Goal**: Verify 4-paragraph structure (Hook → Value → Alignment → CTA).
+### Check 4: Format
 
-#### **4A. Paragraph Count**
+Hard fail if any of the following appear:
+- formal greeting such as `Dear ...`
+- `Re:` or subject-style headers
+- H2 or section-title formatting
+- a large contact-info block inside the letter
 
-**Count paragraphs** (non-blank text blocks before signature):
+Useful command:
+
 ```bash
-head -n [LINE_NUMBER_BEFORE_BEST] "APPLICATIONS/[Company]_[Role]/COVERLETTER.md" | awk 'BEGIN{RS=""; ORS="\n\n"} {print}' | grep -c -v "^$"
+grep -nE "^(Dear |Re: |Subject:|## )" "APPLICATIONS/[Company]_[Role]/COVERLETTER.md"
 ```
 
-**Expected**: 4 paragraphs
+### Check 5: Proof and specificity
 
-**If not 4 paragraphs → FLAG (not automatic FAIL, but note it)**
+Manually inspect and confirm:
+- first paragraph contains a specific hook tied to the role, product, market, or company direction
+- body includes at least 1 concrete proof point
+- proof point includes an explicit number tied to an outcome, scale marker, speed change, quality bar, or business result
+- final paragraph says where the candidate would help first for this role
 
----
+Metric-detection command:
 
-#### **4B. Paragraph Length Check**
-
-**Goal**: Each paragraph should be 2-4 sentences (not long rambling paragraphs).
-
-**Manual inspection**: Read each paragraph and count sentences.
-
-**Expected**:
-- Paragraph 1 (Hook): 2-3 sentences (~40-50 words)
-- Paragraph 2 (Value): 2-3 sentences (~60-70 words)
-- Paragraph 3 (Alignment): 2-3 sentences (~50-60 words)
-- Paragraph 4 (CTA): 1-2 sentences (~30-40 words)
-
-**If any paragraph >4 sentences or >80 words → FLAG (not FAIL, but note as "too wordy")**
-
----
-
-### **CHECK 5: Content Quality Verification**
-
-#### **5A. Company Hook Present**
-
-**Goal**: Cover letter should start with company-specific hook (NOT generic opening).
-
-**Check first sentence**:
-- GOOD: "Noticed [Company]'s focus on [specific product]..."
-- GOOD: "Saw [Company]'s vision to reinvent [experience]..."
-- BAD: "I am writing to express my interest in the Product Manager position."
-- BAD: "I am excited to apply for the role at [Company]."
-
-**Manual inspection**: Read first sentence.
-
-**If generic/corporate opening → FAIL**
-
----
-
-#### **5B. Quantified Achievement Present**
-
-**Goal**: Paragraph 2 should include at least ONE metric.
-
-**Metric formats to look for**:
-- Before→After: "72%→91%", "34%→68%", "5→2 days"
-- Dollar amounts: "$5M+", "$100K+", "$1M savings"
-- User scales: "10K+ users", "100+ clients", "Fortune 500"
-- Percentages: "95% UAT", "91% activation"
-
-**Command** (check for common metric patterns):
 ```bash
-grep -E "(%|\$[0-9]+|[0-9]+K\+|[0-9]+-[0-9]+|→)" "APPLICATIONS/[Company]_[Role]/COVERLETTER.md"
+grep -E "(%|\\$[0-9]|[0-9]+K\\+|[0-9]+M\\+|Fortune 500|months|weeks|days|users|clients|accuracy|retention|revenue|cost)" "APPLICATIONS/[Company]_[Role]/COVERLETTER.md"
 ```
 
-**Expected**: At least 1 match (quantified metric present)
+Fail if:
+- no concrete proof point exists
+- no explicit number tied to an outcome, scale marker, speed change, quality bar, or business result exists
+- the only number is years of experience or tenure
+- the first sentence does not name the company, team, feature area, or concrete problem
+- the last paragraph does not say where the candidate would help first
+- the letter could obviously be pasted into many unrelated applications with only the company name changed
 
-**If no metrics found → FAIL**
+### Check 6: Tone
 
----
+Fail if the letter contains obvious template-speak or fake enthusiasm, including:
+- `I am writing to express`
+- `I am excited to apply`
+- `I believe I would be a great fit`
+- `I would love to be part of the team`
+- `Your mission deeply resonates`
+- `Let's chat?`
+- `The strongest reason I am interested`
+- `What makes the fit real for me is`
+- `product surface`
+- `high-trust`
+- `shared systems`
+- `where I do my best work`
 
-#### **5C. Role-Specific Alignment**
+Useful command:
 
-**Goal**: Paragraph 3 should mention specific themes from JD (not generic "I love product management").
-
-**Check for specificity**:
-- GOOD: "The focus on developer experience and platform reliability resonates..."
-- GOOD: "I'm particularly drawn to the challenge of [specific challenge]..."
-- BAD: "I am passionate about product management and building great products."
-- BAD: "I believe my skills align well with your requirements."
-
-**Manual inspection**: Read paragraph 3.
-
-**If generic/vague alignment → FLAG (not FAIL, but note as "could be more specific")**
-
----
-
-#### **5D. Casual But Professional Tone**
-
-**Goal**: Should read like email to peer, not formal letter.
-
-**Check for tone indicators**:
-- GOOD: "Let's chat?", "Happy to walk through...", "You can reach me..."
-- BAD: "I would be honored to discuss...", "I look forward to the opportunity...", "Respectfully,"
-
-**Manual inspection**: Read entire letter for tone.
-
-**If overly formal → FLAG (not FAIL, but note as "too corporate")**
-
----
-
-### **CHECK 6: Corporate Speak Detection (CRITICAL)**
-
-**Goal**: Avoid generic corporate phrases that make cover letter sound like AI wrote it.
-
-**Forbidden phrases** (if found, cover letter should be rewritten):
-- "I am writing to express my interest"
-- "I am excited to apply for"
-- "I believe I would be a great fit"
-- "I look forward to the opportunity"
-- "seems particularly relevant"
-- "aligns with my experience"
-- "would you be open to"
-- "I am passionate about"
-
-**Command**:
 ```bash
-grep -i -E "(writing to express|excited to apply|great fit|look forward to|particularly relevant|aligns with|would you be open|passionate about)" "APPLICATIONS/[Company]_[Role]/COVERLETTER.md"
+grep -niE "(writing to express|excited to apply|great fit|would love to be part of the team|mission deeply resonates|let's chat\\?|The strongest reason I am interested|What makes the fit real for me is|product surface|high-trust|shared systems|where I do my best work)" "APPLICATIONS/[Company]_[Role]/COVERLETTER.md"
 ```
 
-**Expected**: No output (these phrases should NOT exist)
+## Output Format
 
-**If corporate speak found → FAIL**
+Return:
 
----
-
-## RETURN STRUCTURED REPORT
-
-After running ALL checks, compile and return:
-
-```
-================================================================================
+```text
+============================================================
 COVER LETTER VERIFICATION REPORT
-================================================================================
+============================================================
 
-File Verified: APPLICATIONS/[Company]_[Role]/COVERLETTER.md
+File: APPLICATIONS/[Company]_[Role]/COVERLETTER.md
 
---------------------------------------------------------------------------------
-CHECK 1: WORD COUNT VERIFICATION
---------------------------------------------------------------------------------
+Hard Checks
+- Body words: [X] -> [PASS/FAIL]
+- Opener usefulness: [PASS/FAIL]
+- Format: [PASS/FAIL]
+- Proof + explicit number: [PASS/FAIL]
+- Job relevance + contribution area: [PASS/FAIL]
+- Tone: [PASS/FAIL]
 
-Total words: 187 words
-Body words (excluding signature): 178 words
-Target range: 150-200 words
+Soft Checks
+- Target range 100-140 words: [PASS/FLAG]
+- Preferred 3 paragraphs: [PASS/FLAG]
+- Preferred 6-10 non-blank lines: [PASS/FLAG]
 
-Result: ✓ PASS (178 within range)
+Notes
+- Hook: [brief evaluation]
+- Proof: [brief evaluation]
+- Weaknesses: [brief list or "none"]
 
---------------------------------------------------------------------------------
-CHECK 2: LINE COUNT VERIFICATION
---------------------------------------------------------------------------------
-
-Total body lines (including blank): 15 lines
-Content lines (excluding blank): 11 lines
-Target range: 8-12 content lines
-
-Result: ✓ PASS (11 within range)
-
---------------------------------------------------------------------------------
-CHECK 3: FORMAT VERIFICATION
---------------------------------------------------------------------------------
-
-No Formal Headers: ✓ PASS (no "Dear", "Re:", etc. found)
-No Section Titles: ✓ PASS (no H2 headings found)
-Signature Block: ✓ PASS (includes name, email, phone)
-
-Result: ALL CHECKS PASS → ✓ PASS
-
---------------------------------------------------------------------------------
-CHECK 4: STRUCTURE VERIFICATION
---------------------------------------------------------------------------------
-
-Paragraph Count: 4 paragraphs ✓
-
-Paragraph Lengths:
-- Paragraph 1 (Hook): 2 sentences, ~45 words ✓
-- Paragraph 2 (Value): 3 sentences, ~65 words ✓
-- Paragraph 3 (Alignment): 2 sentences, ~50 words ✓
-- Paragraph 4 (CTA): 2 sentences, ~35 words ✓
-
-Result: ALL CHECKS PASS → ✓ PASS
-
---------------------------------------------------------------------------------
-CHECK 5: CONTENT QUALITY VERIFICATION
---------------------------------------------------------------------------------
-
-Company Hook Present: ✓ PASS
-  - First sentence: "Noticed [Company]'s focus on [specific product]..."
-
-Quantified Achievement: ✓ PASS
-  - Metrics found: "72%→91%", "$5M+ cost savings"
-
-Role-Specific Alignment: ✓ PASS
-  - Mentions: "[specific JD theme]", "[specific challenge]"
-
-Casual But Professional Tone: ✓ PASS
-  - Uses: "Let's chat?", "Happy to walk through..."
-
-Result: ALL CHECKS PASS → ✓ PASS
-
---------------------------------------------------------------------------------
-CHECK 6: CORPORATE SPEAK DETECTION
---------------------------------------------------------------------------------
-
-Forbidden Phrases: None found ✓
-  - No "writing to express", "excited to apply", "great fit", etc.
-
-Result: ✓ PASS
-
---------------------------------------------------------------------------------
-OVERALL VERIFICATION RESULT
---------------------------------------------------------------------------------
-
-✓ PASS
-
-All verification checks passed:
-- Word Count: 178 words (150-200 range) ✓
-- Line Count: 11 lines (8-12 range) ✓
-- Format: No formal headers, no section titles, signature present ✓
-- Structure: 4 paragraphs with appropriate lengths ✓
-- Content Quality: Company hook, quantified achievement, specific alignment ✓
-- Tone: Casual but professional ✓
-- No Corporate Speak: Clean, authentic tone ✓
-
-Cover letter is ready for DOCX conversion.
-
-================================================================================
+OVERALL: [PASS/FAIL]
 ```
 
-**If ANY check fails:**
-
-```
-================================================================================
-OVERALL VERIFICATION RESULT
---------------------------------------------------------------------------------
-
-✗ FAIL
-
-Critical Failures:
-- [Check Name]: [Specific failure description]
-- [Check Name]: [Specific failure description]
-
-Passed Checks:
-- [List of checks that passed]
-
-Recommendation:
-Regenerate cover letter with corrections:
-- [Specific fix 1]
-- [Specific fix 2]
-
-================================================================================
-```
-
----
+Rules:
+- OVERALL is FAIL if any hard check fails.
+- Soft-check flags alone do not fail the letter.
+- Feedback must be actionable and specific.
 
 ## Critical Reminders
 
-**DO NOT:**
-- Skip Bash commands (especially `wc -w`, `wc -l`)
-- Estimate or assume word/line counts (MUST run commands)
-- Approve cover letter if ANY critical check fails
-- Return generic "looks good" without running verifications
-
-**DO:**
-- Run Bash `wc -w` for word count (show result)
-- Run Bash `wc -l` for line count (show result)
-- Check for forbidden phrases (formal headers, corporate speak)
-- Verify quantified achievement present (at least 1 metric)
-- Return structured report with detailed breakdown
-- Mark OVERALL as FAIL if ANY critical check fails
-
----
-
-## Notes
-
-- **Word count is MOST CRITICAL** - cover letters often balloon to 300-500 words (too long)
-- **Application Orchestrator will use your report** to decide: PASS (proceed to DOCX conversion) or FAIL (re-spawn CoverLetter Creator for retry)
-- **Be precise with Bash commands** - run them exactly as specified
-- **If FAIL, provide actionable feedback** - tell CoverLetter Creator exactly what to fix (too many words, missing metrics, corporate speak phrases)
+- Run real shell commands for count checks.
+- Do not require a signoff or contact block.
+- Judge recruiter usefulness, not template compliance theater.
+- A short, specific letter is better than a perfect-sounding generic one.
+- Treat abstract filler as a real quality problem, not a style nit.

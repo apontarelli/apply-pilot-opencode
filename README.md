@@ -15,7 +15,7 @@ Drop in a job description → Get application-ready materials:
 
 - **Strategic JD Assessment** with fit scoring and gap analysis
 - **Tailored Resume** (bullets per your distribution, each 240-260 chars, 6-point framework)
-- **Cover Letter** (8-12 lines, 150-200 words, minimalist format)
+- **Cover Letter** (proof-first short note, target 100-140 words)
 - **Outreach Strategy** (multi-track with 3-tier escalation)
 - **Ready-to-Send DOCX** files
 
@@ -62,7 +62,7 @@ Drop in a job description → Get application-ready materials:
 1. **JD Assessor** - Analyzes JD, scores fit, recommends spinning strategy
 2. **Resume Creator** - Selects bullets, applies industry spinning
 3. **Resume Verifier** - Validates character counts, structure, quality
-4. **CoverLetter Creator** - Creates 4-paragraph minimalist cover letter
+4. **CoverLetter Creator** - Creates short proof-first cover letters
 5. **CoverLetter Verifier** - Validates format and content
 6. **Outreach Creator** - Creates multi-track outreach strategy
 7. **Outreach Verifier** - Validates personalization and quality
@@ -110,6 +110,22 @@ opencode
 # Paste job description when prompted
 ```
 
+For live LinkedIn discovery or URL intake:
+```text
+$job-search
+```
+
+For batch screening with durable logging:
+```text
+$job-search
+# ask it to batch-screen roles, log every decision, and hand strong fits to $job-apply
+```
+
+For lane routing and application answers once you already have JD text:
+```text
+$job-apply
+```
+
 **Output:** `APPLICATIONS/[Company]_[Role]/` with DOCX files ready to submit
 
 ---
@@ -140,6 +156,8 @@ Led cross-functional discovery for payment reconciliation platform, facilitating
 |---------|-------------|--------|
 | `/apply` | Complete application package | JD.md, RESUME.md, COVERLETTER.md, OUTREACH.md, DOCX files |
 | `/init` | Validate system setup | Status report |
+| `$job-search` | Search LinkedIn, batch-screen roles, log decisions, normalize JD text | Ranked roles, logged screening decisions, reusable JD packet with job link and resume guidance |
+| `$job-apply` | Route a ready JD to the right resume lane and draft answers | Resume-lane recommendation, apply/pass call, QA, ready-to-apply handoff with job link, resume, and materials |
 
 ---
 
@@ -147,6 +165,14 @@ Led cross-functional discovery for payment reconciliation platform, facilitating
 
 ```
 OPEN_SOURCE_JOB_APPLICATION_SYSTEM/
+├── .codex/
+│   └── config.toml               # Repo-scoped Codex MCP config
+│
+├── .agents/
+│   └── skills/
+│       ├── job-apply/
+│       └── job-search/
+│
 ├── .opencode/
 │   ├── command/
 │   │   ├── apply.md               # /apply command
@@ -162,7 +188,11 @@ OPEN_SOURCE_JOB_APPLICATION_SYSTEM/
 │       └── outreach-verifier.md
 │
 ├── APPLICATIONS/                  # Generated applications go here
-│   └── [Company]_[Role]/
+│   ├── READY_TO_APPLY/
+│   │   └── [Company]_[Role]/
+│   └── _ops/
+│       ├── job_pipeline.jsonl
+│       └── JOB_PIPELINE.md
 │
 ├── PLAYBOOK/
 │   ├── MASTER_TEMPLATE.md         # Resume format reference

@@ -8,58 +8,60 @@
 
 ---
 
-## HARD SETS (Founder / Product Builder - Bootstrapped side project)
+## BULLET LIBRARY
 
-- Architected a local-first workout logging PWA around SQLite/WASM storage and installable UX, enabling 100% offline completion and sub-second entry updates; proved a no-backend product architecture that scales to thousands of on-device records.
+### SIDE PROJECTS — Hard Sets (Founder / Product Builder)
 
-- Built and shipped Hard Sets end-to-end as a solo PM/engineer using Codex, Claude Code, and OpenCode to compress spec-to-release loops into same-day iterations; maintained product, code, QA, and launch ownership while demonstrating AI product-building fluency.
+- Designed a local-first workout app for serious athletes, enabling sub-second logging and durable on-device history so users could train reliably without network delays, broken sessions, or bloated flows during workouts.
 
----
+- Built AI workout import that turns images and PDFs into structured workouts, using multimodal extraction, deterministic normalization, confidence-based review routing, and evals to keep the feature trustworthy.
 
-## WRAPBOOK — Senior Product Manager I
+- Built an AI-native delivery loop from PRDs to browser smoke tests, using agents to turn rough strategy into specs, tickets, code, reviews, and verification while I owned overall architecture, tradeoffs, product judgment, UAT, and delivery quality.
 
-### Frontend Platform + Design Systems + AI Workflows
+### WRAPBOOK — Senior Product Manager I (Fintech / Platform / AI)
 
-- Embedded on Frontend Platform with Design and Engineering to align shared UI primitives across 10+ product teams; translated Figma patterns into production-ready requirements, reducing rework and accelerating delivery across core financial workflows.
+- Closed a major product gap for film/TV prospects by standardizing accounting and payroll reporting, giving customers the filtering, grouping, and export flexibility they expected and making Wrapbook a more viable option for production accounting workflows.
 
-- Owned the company design system across core product surfaces; introduced reusable component APIs and governance for 10+ product teams, reducing design drift and making feature delivery more predictable across a growing multi-product platform.
+- Eliminated one of Wrapbook's biggest reporting support issues by making large report exports reliable and self-serve, ending timeout failures and noisy email delivery while giving finance teams a dependable place to retrieve critical outputs.
 
-- Owned the Figma component library underpinning Wrapbook's design system; enforced parity with shipped components so 10+ product teams could design against canonical patterns, reducing handoff ambiguity and lowering implementation risk before build started.
+- Replaced one-off report builds with a reusable reporting framework across ~10 reports, cutting new report delivery from ~2-3 months to ~2-3 weeks and expanding reporting capacity without proportional engineering cost as reporting demand grew.
 
-- Shipped MCP tooling exposing design tokens and primitives to code agents for 30+ engineers; enabled AI-assisted implementation against canonical UI rules, reducing integration friction and improving design-to-code consistency across shared platform work.
+- Defined Wrapbook's cross-org strategy for data and reporting, giving teams a shared model for how rich data should be viewed, manipulated, and exported across payroll, onboarding, workflow reports, and the web General Ledger that other teams shipped.
 
-- Drove design AI workflow strategy with Figma Make across 10+ product teams; built SME and customer feedback loops around rapid prototypes, exposing feasibility gaps earlier and reducing wasted engineering investment on lower-confidence concepts.
+- Introduced natural-language reporting so accountants could turn prompts into reports and insights, using schema-validated configs with allowed parameters; reached >95% accuracy across ~20 eval prompts while blocking hallucinated values from reaching users.
 
-### Financial Platform & Reporting
+### WRAPBOOK — Product Manager (Fintech / 0-to-1 / Trust)
 
-- Launched Wrapbook's first customer-facing AI feature atop a reporting platform spanning ~10 reports; paired prompt design with test cases and guardrails to make outputs reliable for finance workflows, opening a practical AI wedge in a high-trust product.
+- Unlocked Wrapbook's entry into film/TV accounting by shipping a 0-to-1 accounting product across 30+ engineers in 6 months, spanning setup, bank visibility, dashboard, and close workflows and turning a previously inaccessible market into a sellable category.
 
-- Built an interactive spreadsheet grid primitive in Rails + Turbo for 10+ financial workflows; standardized filtering, grouping, validation, autosave, and column controls, reducing UI build work and making dense finance tasks faster and more familiar for users.
+- Protected customer trust after security incidents by securing access for 50,000+ users through MFA rollout and Auth0 migration without disrupting payroll continuity, while meeting SSO requirements for enterprise adoption with Netflix, Fox, and Disney.
 
-- Built a standardized reporting platform powering ~10 reports with reusable filters, subtotals, templates, and exports; cut new report delivery from ~2-3 months to ~2-3 weeks, accelerating roadmap capacity and lowering engineering cost per report.
+- Protected one of Wrapbook's largest profit centers by aligning workers comp billing with customer quotes and 50-state insurance guidance, reducing refund overcharges, freeing a risk team from manual crew-list reviews, and strengthening customer trust.
 
-- Shipped an exports hub with background processing and retries for ~10 reports; eliminated timeout-prone generation flows, reduced support friction, and gave finance teams reliable self-serve access to PDF/CSV/XLSX outputs without waiting on engineering.
+### FILM / TV PRODUCTION & PRODUCTION ACCOUNTING
 
-- Defined the reporting platform roadmap to replace one-off builds with reusable data primitives and self-serve surfaces; created a path from ~10 live reports toward 10-20 standardized reports, improving scale economics for finance team requests.
+- Protected cast pay accuracy and studio economics by resolving ~$80K in SAG payroll discrepancies, ensuring fair union wages, avoiding an external audit and potential penalties, and preserving trust with talent, Netflix, and production leadership.
 
-- Shipped two foundational accounting reports, General Ledger and Trial Balance, with dense layouts and validation controls; enabled accurate close workflows and audit-ready records across high-volume payroll transactions, strengthening platform credibility.
-
----
-
-## WRAPBOOK — Product Manager (Mar 2022 – Sep 2023)
-
-- Launched a 0-to-1 double-entry accounting MVP across a 30-engineer org in ~6 months; defined posting rules, validations, and fund flows that unlocked a credible accounting foundation and moved Wrapbook closer to serving the broader film/TV finance stack.
-
-- Built a bank-balance widget by aggregating 2 financial data sources in SQL; gave teams real-time cash visibility inside Wrapbook, reducing manual reconciliation and increasing product stickiness by moving a daily finance check into the core workflow.
-
-- Built a 50-state workers compensation engine applying state rates by job title and location; automated premium calculations across all 50 states, processing millions in annual premiums while preventing billing errors and reducing manual insurance ops.
-
-- Rolled out email MFA and led a full Auth0 migration after security incidents, hardening authentication for 50,000+ monthly users while preserving account continuity; reduced platform risk and restored trust without disruptive customer re-onboarding.
+- Helped restart Netflix's *Selena: The Series* after a 5-month COVID shutdown by codifying SAG-compliant finance protocols, protecting cast and crew safety, reducing risk of a union-mandated stoppage, and preserving schedule viability on a $50M+ production.
 
 ---
 
-## FILM/TV PRODUCTION & PRODUCTION ACCOUNTING
+### WRAPBOOK — Senior Product Manager I (Design Systems / AI Tooling)
 
-- Ran weekly SAG payroll audits across active productions, reconciling complex pay records and processing adjustments; kept talent payments compliant, reduced studio penalty exposure, and preserved clean books in a high-scrutiny union environment.
+- Led shared component and design-system work across 10+ product teams, connecting customer requirements to reusable patterns that improved design-to-code consistency, reduced rework, and accelerated delivery across core financial workflows at scale.
 
-- Authored the COVID-19 production finance manual for Netflix's *Selena: The Series* with executives; aligned SAG-compliant protocols that helped restart filming after a 5-month shutdown on a $50M+ production, protecting schedule recovery and spend control.
+- Owned the company design system across core product surfaces, introducing reusable component APIs and governance for 10+ product teams so designers and engineers could reuse battle-tested patterns, move faster, and spend more time on user testing and delivery.
+
+- Led MCP tooling exposing design tokens and UI primitives to code agents for ~100 engineers, helping AI-generated code stay aligned to canonical product patterns while enabling safer prototyping by PMs and designers across a growing multi-product platform.
+
+- Led AI-assisted prototyping with Figma Make across 10+ product teams, using SME and customer feedback loops to test concepts earlier, surface feasibility gaps faster, and reduce engineering time spent on lower-confidence product directions.
+
+### WRAPBOOK — Additional Reporting / Accounting Platform Work
+
+- Led an interactive spreadsheet-grid primitive for 10+ financial workflows, standardizing filtering, grouping, validation, autosave, and column controls to reduce UI rework and make dense daily operator tasks faster and more familiar for users.
+
+- Led an exports hub across ~10 reports, using background processing and retries to ensure finance teams could reliably generate and access outputs from anywhere in the app while virtually eliminating a major source of reporting friction and support tickets.
+
+- Launched General Ledger and Trial Balance reports that gave finance teams audit-ready records for accurate close workflows across high-volume payroll transactions, making Wrapbook usable for real accounting work in actual customer operations.
+
+- Turned complex accounting data sources across budgets, payroll, AP, journal entries, and vendor payments into reusable data models for reporting and dashboard surfaces, creating a single source of truth that made new transaction types easier to support.

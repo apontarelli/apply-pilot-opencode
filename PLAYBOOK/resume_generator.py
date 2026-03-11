@@ -377,31 +377,33 @@ def create_resume_from_markdown(md_file_path, output_path):
                 i += 1
                 continue
 
-        # EDUCATION (University | Degree | Year)
+        # EDUCATION (University | Degree | Year) or (University | Degree)
         if '|' in line and not line.startswith('#') and ('University' in line or 'GPA' in line):
             parts = [p.strip() for p in line.split('|')]
 
-            if len(parts) >= 3:
-                # Extract year from last part (might have ** markers)
-                year_part = clean_markdown(parts[-1])
-                left_parts = parts[:-1]
-                left_text = ' | '.join(left_parts)
-
+            if len(parts) >= 2:
                 para = doc.add_paragraph()
                 para.paragraph_format.space_after = Pt(0)  # Tight
                 para.paragraph_format.line_spacing = 1.0   # CRITICAL: 1.0 line spacing (not 1.5)
 
-                # Add tab stop at right edge (7.75") for right-aligned year
-                tab_stops = para.paragraph_format.tab_stops
-                tab_stops.add_tab_stop(Inches(7.75), WD_TAB_ALIGNMENT.RIGHT)
+                if len(parts) >= 3:
+                    # Extract year from last part (might have ** markers)
+                    year_part = clean_markdown(parts[-1])
+                    left_parts = parts[:-1]
+                    left_text = ' | '.join(left_parts)
 
-                # University | Degree | GPA (mixed bold)
-                add_mixed_format_text(para, left_text, 10)
+                    # Add tab stop at right edge (7.75") for right-aligned year
+                    tab_stops = para.paragraph_format.tab_stops
+                    tab_stops.add_tab_stop(Inches(7.75), WD_TAB_ALIGNMENT.RIGHT)
 
-                # Tab + Year (right-aligned)
-                para.add_run('\t')
-                run_year = para.add_run(year_part)
-                set_calibri_font(run_year, 10)
+                    add_mixed_format_text(para, left_text, 10)
+
+                    # Tab + Year (right-aligned)
+                    para.add_run('\t')
+                    run_year = para.add_run(year_part)
+                    set_calibri_font(run_year, 10)
+                else:
+                    add_mixed_format_text(para, clean_markdown(line), 10)
 
                 i += 1
                 continue
