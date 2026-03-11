@@ -15,7 +15,7 @@ Portfolio: hardsets.com
 
 ## PROFESSIONAL SUMMARY
 
-Product Manager building financial data platforms and workflow infrastructure in B2B SaaS, with 11 years in film and television production finance. At Wrapbook, led accounting reporting and ledger-adjacent infrastructure (GL/TB, cost reporting, validations, audit trails) and built platform UI primitives used across core financial workflows.
+PM who turns financial-workflow complexity into scalable product systems. At Wrapbook, cut new report delivery from 2-3 months to 2-3 weeks, shipped 0-to-1 accounting infrastructure, and built platform primitives used across 10+ teams and 50,000+ users.
 
 ---
 
@@ -54,6 +54,14 @@ Engineering organization scope: **30+ engineers** (project-specific initiatives 
 
 Platform/design-system coverage: **10+ product teams** (UI foundations and shared components)
 
+Reporting platform scope: **~10 live reports** (reporting platform, exports hub, NLQ)
+
+User scale: **50,000+ monthly users** (auth/security initiatives)
+
+Insurance scope: **50 states** and **millions in annual premiums** (workers compensation engine)
+
+Production finance scope: **$50M+ production** and **5-month shutdown recovery** (*Selena: The Series*)
+
 Always specify which metric you are referencing.
 
 ---
@@ -69,8 +77,8 @@ Architecting a local-first workout tracking product focused on instant logging, 
 
 Focus Areas:
 
-- Architected local-first workout logging PWA using SQLite/WASM data model delivering instant offline logging and installable native-like UX with reliable on-device storage.
-- Built and shipped the product end-to-end as a solo builder using AI-assisted development tools to accelerate iteration while independently owning architecture, releases, and product quality.
+- Architected a local-first workout logging PWA around SQLite/WASM, enabling offline-first usage and sub-second logging without backend dependencies.
+- Built and shipped the product end-to-end as a solo PM/builder using AI-assisted development tools, compressing iteration loops while owning product, code, releases, and quality.
 
 ---
 
@@ -83,10 +91,10 @@ Frontend platform and financial reporting product leadership for a payroll and a
 
 Focus Areas:
 
-- Led development of reusable spreadsheet-style grid primitive adopted across timecards, AP, journal entries, payroll, GL, and reconciliation workflows.
-- Built standardized financial reporting platform powering ~10 reports and reducing engineering build time from ~2–3 months to ~2–3 weeks.
-- Shipped exports hub enabling reliable background generation of financial reports and reducing operational support friction.
-- Defined reporting platform roadmap consolidating bespoke reports into reusable data primitives and self-serve reporting surfaces.
+- Standardized spreadsheet-style grid primitives across timecards, AP, journal entries, payroll, GL, and reconciliation workflows.
+- Built a reusable reporting platform powering ~10 reports and cutting new report delivery from ~2-3 months to ~2-3 weeks.
+- Shipped an exports hub with background processing and retries, reducing timeout-prone report generation and support friction.
+- Defined the roadmap to replace bespoke reporting builds with reusable data primitives and self-serve reporting surfaces.
 
 ---
 
@@ -99,11 +107,11 @@ Product leadership for accounting and financial infrastructure powering payroll 
 
 Focus Areas:
 
-- Shipped 0-to-1 double-entry accounting MVP with posting rules, validation controls, and fund-flow workflows across a 30-engineer organization.
-- Launched General Ledger and Trial Balance reports enabling finance teams to close books accurately.
-- Built bank balance aggregation widget providing real-time financial visibility across the platform.
-- Implemented 50-state workers compensation calculation engine processing millions in annual premiums.
-- Led MFA rollout and Auth0 migration strengthening platform security for 50,000+ users.
+- Shipped a 0-to-1 double-entry accounting MVP with posting rules, validation controls, and fund-flow workflows across a 30-engineer organization.
+- Launched General Ledger and Trial Balance reports that enabled accurate close workflows and audit-ready records.
+- Built a bank balance widget that moved cash visibility into core product workflows for finance teams.
+- Implemented a 50-state workers compensation engine processing millions in annual premiums with strict validation controls.
+- Led MFA rollout and Auth0 migration that hardened platform security for 50,000+ users after security incidents.
 
 ---
 
@@ -116,8 +124,8 @@ Finance leadership across film and television productions responsible for payrol
 
 Focus Areas:
 
-- Executed SAG payroll audits reconciling complex talent payments across productions.
-- Authored production finance protocols enabling Netflix’s *Selena: The Series* to resume filming after a pandemic shutdown.
+- Ran weekly SAG payroll audits reconciling complex talent payments across active productions.
+- Authored production finance protocols that helped Netflix's *Selena: The Series* resume filming after a 5-month shutdown.
 
 ---
 
@@ -137,7 +145,7 @@ Technical: SQL, data modeling, Rails/Hotwire, TypeScript, SQLite/WASM, exports p
 
 Product: platform strategy, 0-to-1 product development, cross-functional leadership, customer discovery, roadmap planning
 
-AI tools: Claude Code, Codex, OpenCode, Cursor, Figma Make
+AI/LLM: prompt design, eval cases, structured outputs, safety guardrails, MCP tooling, Claude Code, Codex, OpenCode, Cursor, Figma Make
 
 Design systems: component APIs, design-to-engineering collaboration, design system governance
 
