@@ -21,6 +21,15 @@ Drop in a job description → Get application-ready materials:
 
 **Time Saved**: What used to take 30-45 minutes per application now takes ~5 minutes.
 
+The repo is also evolving into an active job-search operating system. The current direction is a company-first command center that tracks target companies, roles, actions, contacts, artifacts, gaps, and outcomes without making LinkedIn scraping the source of truth.
+
+Active planning doc:
+- `docs/exec-plans/job-search-command-center.md`
+
+Implementation tracker:
+- Linear project: `Job Search Command Center`
+- Side Projects tickets: `SID-76` through `SID-81`
+
 ---
 
 ## Architecture
@@ -110,23 +119,43 @@ opencode
 # Paste job description when prompted
 ```
 
-For live LinkedIn discovery or URL intake:
-```text
-$job-search
-```
-
-For batch screening with durable logging:
-```text
-$job-search
-# ask it to batch-screen roles, log every decision, and hand strong fits to $job-apply
-```
-
-For lane routing and application answers once you already have JD text:
+For live application routing once you already have JD text:
 ```text
 $job-apply
 ```
 
+For LinkedIn discovery or URL intake:
+```text
+$job-search
+```
+
+Note: `$job-search` is being redesigned from a role-first LinkedIn/JSONL workflow into a company-first SQLite command center. Until that cutover lands, treat it as read-only intake and role screening, not the durable source of truth.
+
 **Output:** `APPLICATIONS/[Company]_[Role]/` with DOCX files ready to submit
+
+---
+
+## Job Search Command Center
+
+Planned v1 replaces the old role-first job pipeline with:
+
+- Codex as the primary daily surface
+- `scripts/job_search.py` as the deterministic CLI
+- SQLite at `APPLICATIONS/_ops/job_search.sqlite`
+- company-first tracking for target companies and prior attempts
+- action queues for screening, applying, follow-ups, research, artifacts, and outcome classification
+- minimal contacts, artifacts, gaps, and event history
+- no Markdown dashboard in v1
+- no automated polling in the first slice
+
+V1.1 adds ATS-native target-company polling, starting with Greenhouse, Lever, and Ashby. Broad LinkedIn polling remains lower priority because it is noisier and more brittle.
+
+Superseded flow:
+- `scripts/job_pipeline.py`
+- `APPLICATIONS/_ops/job_pipeline.jsonl`
+- `APPLICATIONS/_ops/JOB_PIPELINE.md`
+
+Those old pipeline pieces are historical context until the cutover ticket removes or migrates them.
 
 ---
 
@@ -156,7 +185,7 @@ Led cross-functional discovery for payment reconciliation platform, facilitating
 |---------|-------------|--------|
 | `/apply` | Complete application package | JD.md, RESUME.md, COVERLETTER.md, OUTREACH.md, DOCX files |
 | `/init` | Validate system setup | Status report |
-| `$job-search` | Search LinkedIn, batch-screen roles, log decisions, normalize JD text | Ranked roles, logged screening decisions, reusable JD packet with job link and resume guidance |
+| `$job-search` | Transitional LinkedIn discovery, URL intake, and role screening | Shortlist, normalized JD packet, fit/risk notes |
 | `$job-apply` | Route a ready JD to the right resume lane and draft answers | Resume-lane recommendation, apply/pass call, QA, ready-to-apply handoff with job link, resume, and materials |
 
 ---
@@ -191,8 +220,7 @@ OPEN_SOURCE_JOB_APPLICATION_SYSTEM/
 │   ├── READY_TO_APPLY/
 │   │   └── [Company]_[Role]/
 │   └── _ops/
-│       ├── job_pipeline.jsonl
-│       └── JOB_PIPELINE.md
+│       └── job_search.sqlite       # Planned command-center database
 │
 ├── PLAYBOOK/
 │   ├── MASTER_TEMPLATE.md         # Resume format reference
@@ -205,10 +233,16 @@ OPEN_SOURCE_JOB_APPLICATION_SYSTEM/
 ├── YOUR_PROFILE/
 │   ├── USER_PROFILE.md            # Your professional profile
 │   ├── USER_BULLETS.md            # Your bullet library
-│   └── examples/
-│       ├── EXAMPLE_USER_PROFILE.md
-│       ├── EXAMPLE_USER_BULLETS.md
-│       └── EXAMPLE_JD.md
+│   ├── APPLICATION_PLAYBOOK.md     # Live application workflow guidance
+│   ├── CAREER_STRATEGY.md          # Lane strategy and cadence
+│   ├── Fintech/FINTECH.md          # Primary fintech/platform resume lane
+│   ├── Access/ACCESS.md            # Access/trust workflow resume lane
+│   ├── AI/AI.md                    # AI workflow resume lane
+│   └── DESIGN.md                   # Inactive design-lane placeholder
+│
+├── docs/
+│   └── exec-plans/
+│       └── job-search-command-center.md
 │
 ├── AGENTS.md                      # OpenCode instructions
 └── README.md                      # This file
