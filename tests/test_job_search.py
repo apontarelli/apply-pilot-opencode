@@ -623,6 +623,143 @@ class JobSearchDatabaseTests(unittest.TestCase):
         ):
             self.assertIn(command, result.stdout)
 
+    def test_company_job_workflow_generates_actions_without_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            self.run_cli(
+                db_path,
+                "company",
+                "add",
+                "Coinbase",
+                "--tier",
+                "1",
+                "--lanes",
+                "fintech",
+            )
+            self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Coinbase",
+                "Senior Product Manager",
+                "--fit-score",
+                "85",
+                "--url",
+                "https://example.com/coinbase-spm",
+            )
+            first_ready = self.run_cli(
+                db_path, "job", "update", "1", "--status", "ready_to_apply"
+            )
+            second_ready = self.run_cli(
+                db_path, "job", "update", "1", "--status", "ready_to_apply"
+            )
+            next_apply = self.run_cli(
+                db_path, "action", "next", "--queue", "apply", "--limit", "5"
+            )
+            company_show = self.run_cli(db_path, "company", "show", "Coinbase")
+
+            self.assertIn("job updated id=1", first_ready.stdout)
+            self.assertIn("job updated id=1", second_ready.stdout)
+            self.assertIn(
+                "#3 | apply:apply | queued | due=unscheduled | Coinbase / Senior Product Manager",
+                next_apply.stdout,
+            )
+            self.assertIn("Company: Coinbase", company_show.stdout)
+            self.assertIn(
+                "Summary: tier=1 | status=active | lanes=fintech",
+                company_show.stdout,
+            )
+            self.assertIn("Cooldown: none", company_show.stdout)
+            self.assertIn("Active jobs:", company_show.stdout)
+            self.assertIn("Open actions:", company_show.stdout)
+            self.assertIn("Next best action:", company_show.stdout)
+
+            with closing(self.connect(db_path)) as connection:
+                action_counts = connection.execute(
+                    """
+                    SELECT queue, kind, COUNT(*)
+                    FROM actions
+                    GROUP BY queue, kind
+                    ORDER BY queue, kind
+                    """
+                ).fetchall()
+
+            self.assertEqual(
+                action_counts,
+                [
+                    ("apply", "apply", 1),
+                    ("research", "find_contact", 1),
+                    ("screen", "screen_role", 1),
+                ],
+            )
+
+    def test_job_state_changes_generate_follow_up_and_classify_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Stripe", "--tier", "2")
+            self.run_cli(db_path, "job", "add", "Stripe", "Product Manager")
+
+            self.run_cli(db_path, "job", "update", "1", "--status", "applied")
+            self.run_cli(
+                db_path,
+                "job",
+                "update",
+                "1",
+                "--status",
+                "rejected",
+                "--rejection-reason",
+                "No interview",
+            )
+
+            with closing(self.connect(db_path)) as connection:
+                generated = connection.execute(
+                    """
+                    SELECT queue, kind, due_at
+                    FROM actions
+                    ORDER BY queue, kind
+                    """
+                ).fetchall()
+
+            self.assertEqual(generated[0][:2], ("classify", "classify_outcome"))
+            self.assertEqual(generated[1][:2], ("follow_up", "follow_up"))
+            self.assertIsNotNone(generated[1][2])
+
+    def test_done_message_action_generates_single_follow_up(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Mercury", "--tier", "2")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = connection.execute(
+                        "SELECT id FROM companies WHERE name = ?", ("Mercury",)
+                    ).fetchone()[0]
+                    connection.execute(
+                        """
+                        INSERT INTO actions(company_id, queue, kind, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (company_id, "research", "send_message", NOW, NOW),
+                    )
+
+            self.run_cli(db_path, "action", "done", "1", "--message-sent")
+            self.run_cli(db_path, "action", "done", "1", "--message-sent")
+
+            with closing(self.connect(db_path)) as connection:
+                follow_up_count = connection.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM actions
+                    WHERE queue = 'follow_up' AND kind = 'follow_up'
+                    """
+                ).fetchone()[0]
+
+            self.assertEqual(follow_up_count, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
