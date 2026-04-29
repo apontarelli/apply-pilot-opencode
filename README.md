@@ -188,6 +188,14 @@ Led cross-functional discovery for payment reconciliation platform, facilitating
 | `$job-search` | Transitional LinkedIn discovery, URL intake, and role screening | Shortlist, normalized JD packet, fit/risk notes |
 | `$job-apply` | Route a ready JD to the right resume lane and draft answers | Resume-lane recommendation, apply/pass call, QA, ready-to-apply handoff with job link, resume, and materials |
 
+## Validation
+
+Run the deterministic repo gate before handoff:
+
+```bash
+make test
+```
+
 ---
 
 ## File Structure
