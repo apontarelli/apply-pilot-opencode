@@ -41,6 +41,9 @@ python3 scripts/job_search.py query import --file APPLICATIONS/_ops/query-runs/f
 python3 scripts/job_search.py query import --source manual_browser --pack FINTECH --query "senior product manager payroll" --result-count 12 --raw-source-reference manual-2026-04-29
 python3 scripts/job_search.py query list
 python3 scripts/job_search.py query show <query_run_id>
+python3 scripts/job_search.py query packs list --default-only
+python3 scripts/job_search.py query packs show FINTECH
+python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --limit 25
 python3 scripts/job_search.py job add --company "Company" --title "Senior Product Manager" --source manual
 python3 scripts/job_search.py job list --company "Company"
 python3 scripts/job_search.py action next --queue apply --limit 5
@@ -114,7 +117,7 @@ Use two repeatable discovery motions:
   - run configured official ATS sources through `source` and `poll`
   - use official career pages only as manual/browser fallback
 - Query-pack-first within broad source adapters:
-  - run explicit FINTECH and AI packs against LinkedIn MCP or another broad board source
+  - run explicit FINTECH and AI packs from `config/job_search_query_packs.json` against LinkedIn MCP or another broad board source
   - keep ACCESS and other variants as role-specific exception packs
   - record one query run per source and pack before accepting or rejecting jobs
   - validate promising broad-source hits through the canonical posting before adding them as jobs
@@ -212,7 +215,18 @@ The default repeatable broad-search packs are:
 
 ACCESS and other variants are exception packs. They are valid for specific access/trust roles or target-company exceptions, but they are not default broad-search lanes.
 
-The current prose pack guidance lives in `.agents/skills/job-search/references/query-packs.md`. SID-102 should make these packs machine-readable.
+Machine-readable source of truth: `config/job_search_query_packs.json`. The prose guidance in `.agents/skills/job-search/references/query-packs.md` must stay aligned with that registry.
+
+CLI guardrails:
+
+```bash
+python3 scripts/job_search.py query packs list --default-only
+python3 scripts/job_search.py query packs show FINTECH
+python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --limit 25
+python3 scripts/job_search.py query run --source manual_browser --pack ACCESS --reason "specific access/trust target role"
+```
+
+`query run` is preflight-only until the query-run schema/import slice lands: it prints the source, pack, and queries while enforcing pack guardrails. Durable query-run records remain owned by SID-101.
 
 ## Current Next Work
 

@@ -2,6 +2,14 @@
 
 Use these packs for discovery runs. `search_jobs` matches loosely, so start with narrow problem-domain queries and only broaden when the result set is weak.
 
+Machine-readable source of truth: `config/job_search_query_packs.json`. Use the CLI for broad-run guardrails:
+- `python3 scripts/job_search.py query packs list --default-only`
+- `python3 scripts/job_search.py query packs show FINTECH`
+- `python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --limit 25`
+- `python3 scripts/job_search.py query run --source manual_browser --pack ACCESS --reason "specific access/trust target role"`
+
+Default repeatable broad-search packs are `FINTECH` and `AI`. Exception packs such as `ACCESS`, `PAYMENTS_INSURANCE_CRYPTO_TRUST`, and `INDUSTRIAL_AUTONOMY_BRIDGE` require `--reason` on broad query runs and are not default v1 lanes.
+
 ## Title Bands
 
 Default title bands:
@@ -64,7 +72,24 @@ Weak result pattern:
 - model training, ML infra, or research-heavy roles
 - consumer AI growth roles
 
-## Bridge Pack: Payments / Insurance / Crypto Trust
+## Exception Pack: Access / Trust Workflow
+
+Use only when a specific posting or target-company source warrants access/trust workflow discovery.
+
+Queries:
+- `senior product manager identity access`
+- `senior product manager access management`
+- `senior product manager trust workflow`
+- `senior product manager compliance operations`
+- `product manager access reviews`
+- `product manager permissions platform`
+
+Rules:
+- require `--reason` on broad query runs
+- do not list as a default v1 broad-search lane
+- use when the role centers identity, permissions, access management, controls, compliance operations, or trust workflows
+
+## Exception Pack: Payments / Insurance / Crypto Trust
 
 Use only after the primary pack or when the user asks for these categories directly.
 
@@ -80,7 +105,7 @@ Screen hard:
 - apply when the core problem is trustworthy workflow software
 - pass when the role demands deep payment-rail, exchange-core, fraud, underwriting, or claims-specialist pedigree
 
-## Exploratory Pack: Industrial / Autonomy Bridge
+## Exception Pack: Industrial / Autonomy Bridge
 
 Use only when the user explicitly wants exploratory bridge roles.
 
