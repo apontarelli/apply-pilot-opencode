@@ -23,12 +23,12 @@ Drop in a job description → Get application-ready materials:
 
 The repo also includes an active job-search operating system. The company-first command center tracks target companies, roles, actions, contacts, artifacts, gaps, and outcomes without making LinkedIn scraping the source of truth.
 
-Active planning doc:
-- `docs/exec-plans/job-search-command-center.md`
+Durable command-center doc:
+- `docs/job-search-command-center.md`
 
 Implementation tracker:
 - Linear project: `Job Search Command Center`
-- Side Projects tickets: `SID-76` through `SID-81`
+- Next Side Projects tickets: `SID-101`, `SID-102`, `SID-103`
 
 ---
 
