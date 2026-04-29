@@ -376,19 +376,17 @@ Layering:
 Smallest next implementation surface:
 
 ```bash
-python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --limit 25
-python3 scripts/job_search.py query run --source linkedin_mcp --pack AI --limit 15
-python3 scripts/job_search.py query run --source manual_browser --pack ACCESS --reason "specific access/trust target role"
-python3 scripts/job_search.py query import --source manual_browser --pack FINTECH --path APPLICATIONS/_ops/query-runs/fintech.json
+python3 scripts/job_search.py query import --file APPLICATIONS/_ops/query-runs/fintech.json
+python3 scripts/job_search.py query import --source manual_browser --pack FINTECH --query "senior product manager payroll" --result-count 12 --raw-source-reference manual-2026-04-29
 python3 scripts/job_search.py query list --source linkedin_mcp --pack FINTECH
 python3 scripts/job_search.py query show <query_run_id>
 ```
 
 Implementation notes:
 
-- `query run` can start as a record-and-review command; source execution can stay MCP/manual-assisted until a safe adapter boundary exists.
-- `query import` is the fallback for LinkedIn MCP failures and manual/browser runs.
-- Accepted jobs should still be written through existing `job add` semantics or the same internal storage path so duplicate checks and action generation remain centralized.
+- `query import` is the durable record-and-review command for LinkedIn MCP output, manual/browser runs, and saved JSON result files.
+- Saved import JSON supports run metadata plus a `results` array. Result objects may include `company`, `title`, `url`, `source_job_id`, `location`, `remote_status`, `compensation_signal`, `status` / `decision`, `notes`, and raw source references.
+- Accepted jobs should still be written through existing `job add` semantics after review so duplicate checks and action generation remain centralized.
 - Target-company ATS polling remains `source add` plus `poll`, not a query command.
 - Non-FINTECH/AI variants require an explicit reason on the run; `ACCESS` is not a default v1 broad-search lane.
 
