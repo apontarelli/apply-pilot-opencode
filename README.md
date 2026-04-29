@@ -21,7 +21,7 @@ Drop in a job description → Get application-ready materials:
 
 **Time Saved**: What used to take 30-45 minutes per application now takes ~5 minutes.
 
-The repo is also evolving into an active job-search operating system. The current direction is a company-first command center that tracks target companies, roles, actions, contacts, artifacts, gaps, and outcomes without making LinkedIn scraping the source of truth.
+The repo also includes an active job-search operating system. The company-first command center tracks target companies, roles, actions, contacts, artifacts, gaps, and outcomes without making LinkedIn scraping the source of truth.
 
 Active planning doc:
 - `docs/exec-plans/job-search-command-center.md`
@@ -129,7 +129,7 @@ For LinkedIn discovery or URL intake:
 $job-search
 ```
 
-Note: `$job-search` is being redesigned from a role-first LinkedIn/JSONL workflow into a company-first SQLite command center. Until that cutover lands, treat it as read-only intake and role screening, not the durable source of truth.
+`$job-search` uses the company-first SQLite command center for durable history checks before LinkedIn discovery or role screening.
 
 **Output:** `APPLICATIONS/[Company]_[Role]/` with DOCX files ready to submit
 
@@ -137,7 +137,7 @@ Note: `$job-search` is being redesigned from a role-first LinkedIn/JSONL workflo
 
 ## Job Search Command Center
 
-Planned v1 replaces the old role-first job pipeline with:
+The implemented v1 replaces the old role-first job pipeline with:
 
 - Codex as the primary daily surface
 - `scripts/job_search.py` as the deterministic CLI
@@ -148,14 +148,17 @@ Planned v1 replaces the old role-first job pipeline with:
 - no Markdown dashboard in v1
 - no automated polling in the first slice
 
+Core commands:
+- `python3 scripts/job_search.py init`
+- `python3 scripts/job_search.py status`
+- `python3 scripts/job_search.py company show "Company"`
+- `python3 scripts/job_search.py job list --company "Company"`
+- `python3 scripts/job_search.py action next`
+- `python3 scripts/job_search.py event list --company "Company"`
+
 V1.1 adds ATS-native target-company polling, starting with Greenhouse, Lever, and Ashby. Broad LinkedIn polling remains lower priority because it is noisier and more brittle.
 
-Superseded flow:
-- `scripts/job_pipeline.py`
-- `APPLICATIONS/_ops/job_pipeline.jsonl`
-- `APPLICATIONS/_ops/JOB_PIPELINE.md`
-
-Those old pipeline pieces are historical context until the cutover ticket removes or migrates them.
+Cutover note: no legacy `APPLICATIONS/_ops/job_pipeline.jsonl` or `APPLICATIONS/_ops/JOB_PIPELINE.md` files were present in this workspace, so there were no useful records to migrate. The old `scripts/job_pipeline.py` JSONL workflow has been removed.
 
 ---
 
@@ -185,7 +188,7 @@ Led cross-functional discovery for payment reconciliation platform, facilitating
 |---------|-------------|--------|
 | `/apply` | Complete application package | JD.md, RESUME.md, COVERLETTER.md, OUTREACH.md, DOCX files |
 | `/init` | Validate system setup | Status report |
-| `$job-search` | Transitional LinkedIn discovery, URL intake, and role screening | Shortlist, normalized JD packet, fit/risk notes |
+| `$job-search` | Command-center-backed LinkedIn discovery, URL intake, and role screening | History checks, shortlist, normalized JD packet, fit/risk notes |
 | `$job-apply` | Route a ready JD to the right resume lane and draft answers | Resume-lane recommendation, apply/pass call, QA, ready-to-apply handoff with job link, resume, and materials |
 
 ## Validation
@@ -228,7 +231,7 @@ OPEN_SOURCE_JOB_APPLICATION_SYSTEM/
 │   ├── READY_TO_APPLY/
 │   │   └── [Company]_[Role]/
 │   └── _ops/
-│       └── job_search.sqlite       # Planned command-center database
+│       └── job_search.sqlite       # Command-center database
 │
 ├── PLAYBOOK/
 │   ├── MASTER_TEMPLATE.md         # Resume format reference

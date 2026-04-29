@@ -61,30 +61,33 @@ Default automation goal:
 - vet them one by one
 - hand only `ready_to_apply` roles to Antonio for final submission
 
-Durable state lives in:
-- `APPLICATIONS/_ops/job_pipeline.jsonl`
-- `APPLICATIONS/_ops/JOB_PIPELINE.md`
+Durable state lives in the SQLite command center:
+- `APPLICATIONS/_ops/job_search.sqlite`
+- deterministic CLI: `scripts/job_search.py`
 
-Default pipeline statuses:
-- `screened_out`
-- `watch`
+Default job statuses:
+- `ignored_by_filter`
+- `screening`
 - `ready_to_apply`
 - `applied`
+- `rejected`
+- `closed`
 
 Rules:
-- log every screened role, not just the winners
-- skip jobs already screened unless there is a reason to revisit
+- check company, job, action, and event history before searching listings
+- record every screened role, not just the winners
+- skip jobs already tracked unless there is a reason to revisit
 - let `$job-search` continue straight into `$job-apply` when the user wants end-to-end vetting
 - treat `$job-apply` as the final automated gate before Antonio submits manually
-- when Antonio confirms he applied, update the same record to `applied`
+- when Antonio confirms he applied, update the job to `applied` and log an `application_submitted` event
 - every `ready_to_apply` handoff shown to Antonio must include the job link, not just saved file paths
 - every `ready_to_apply` handoff shown to Antonio must include the resume to use and any app-specific materials to review
 - interest level and comp signal are real gates, not optional commentary
 
 Low-effort apply rule:
 - if a role is good enough to submit now with an existing base resume, it should be `ready_to_apply`, not `watch`
-- reserve `watch` for roles not worth immediate submission
-- use `bucket=low_effort_apply` when the right move is: existing resume, no custom cover letter, and only minimal QA if the form forces text fields
+- reserve company `watch` status or action notes for roles not worth immediate submission
+- record `low_effort_apply` in job or action notes when the right move is: existing resume, no custom cover letter, and only minimal QA if the form forces text fields
 - default low-effort apply shape: medium-or-better interest, geo good enough, comp not clearly weak, and no fake story required
 
 ### LinkedIn MCP intake
