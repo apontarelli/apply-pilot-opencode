@@ -14,7 +14,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = REPO_ROOT / "APPLICATIONS" / "_ops" / "job_search.sqlite"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+OPEN_ACTION_STATUSES = ("queued", "in_progress", "blocked", "rescheduled")
+TERMINAL_ACTION_STATUSES = ("done", "skipped")
+JOB_GENERATED_ACTIONS = (
+    ("screen", "screen_role", "Promising role needs screening."),
+    ("apply", "apply", "Role is marked ready to apply."),
+    ("follow_up", "follow_up", "Application submitted; follow up in 5-7 business days."),
+    ("classify", "classify_outcome", "Rejection needs outcome classification."),
+)
 
 
 SCHEMA = """
@@ -167,18 +175,6 @@ CREATE TABLE IF NOT EXISTS actions (
 
 CREATE INDEX IF NOT EXISTS idx_actions_queue_status_due
     ON actions(queue, status, due_at);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_actions_open_dedupe
-    ON actions(
-        company_id,
-        queue,
-        kind,
-        COALESCE(job_id, -1),
-        COALESCE(contact_id, -1),
-        COALESCE(artifact_id, -1),
-        COALESCE(gap_id, -1)
-    )
-    WHERE status IN ('queued', 'in_progress', 'blocked', 'rescheduled');
 
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY,
@@ -413,6 +409,21 @@ END;
 """
 
 
+OPEN_ACTION_DEDUPE_INDEX = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_actions_open_dedupe
+    ON actions(
+        company_id,
+        queue,
+        kind,
+        COALESCE(job_id, -1),
+        COALESCE(contact_id, -1),
+        COALESCE(artifact_id, -1),
+        COALESCE(gap_id, -1)
+    )
+    WHERE status IN ('queued', 'in_progress', 'blocked', 'rescheduled');
+"""
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -444,6 +455,66 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return connection
 
 
+def open_action_status_sql(prefix: str = "") -> str:
+    column = f"{prefix}.status" if prefix else "status"
+    statuses = ", ".join(f"'{status}'" for status in OPEN_ACTION_STATUSES)
+    return f"{column} IN ({statuses})"
+
+
+def migrate_open_action_dedupe(connection: sqlite3.Connection, now: str) -> None:
+    connection.execute(
+        f"""
+        UPDATE actions
+        SET status = 'skipped',
+            notes = CASE
+                WHEN notes IS NULL OR notes = ''
+                    THEN 'Skipped duplicate open action during schema v2 migration.'
+                ELSE notes || char(10) || 'Skipped duplicate open action during schema v2 migration.'
+            END,
+            updated_at = ?
+        WHERE id IN (
+            SELECT id
+            FROM (
+                SELECT
+                    id,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY
+                            company_id,
+                            queue,
+                            kind,
+                            COALESCE(job_id, -1),
+                            COALESCE(contact_id, -1),
+                            COALESCE(artifact_id, -1),
+                            COALESCE(gap_id, -1)
+                        ORDER BY id
+                    ) AS duplicate_rank
+                FROM actions
+                WHERE {open_action_status_sql()}
+            )
+            WHERE duplicate_rank > 1
+        )
+        """,
+        (now,),
+    )
+    connection.executescript(OPEN_ACTION_DEDUPE_INDEX)
+
+
+def migrate_database(connection: sqlite3.Connection) -> None:
+    version = connection.execute(
+        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+    ).fetchone()[0]
+    if version < 2:
+        now = utc_now()
+        migrate_open_action_dedupe(connection, now)
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
+            VALUES (?, ?, ?)
+            """,
+            (2, "open_action_dedupe", now),
+        )
+
+
 def init_database(db_path: Path) -> int:
     with closing(connect(db_path)) as connection:
         with connection:
@@ -453,8 +524,9 @@ def init_database(db_path: Path) -> int:
                 INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
                 VALUES (?, ?, ?)
                 """,
-                (SCHEMA_VERSION, "initial_job_search_schema", utc_now()),
+                (1, "initial_job_search_schema", utc_now()),
             )
+            migrate_database(connection)
     return SCHEMA_VERSION
 
 
@@ -482,6 +554,7 @@ def read_status(db_path: Path) -> dict[str, int | str]:
 def require_database(db_path: Path) -> None:
     if not db_path.exists():
         raise FileNotFoundError(f"Database not initialized: {db_path}")
+    init_database(db_path)
 
 
 def get_company(connection: sqlite3.Connection, name: str) -> sqlite3.Row:
@@ -502,8 +575,35 @@ def get_job(connection: sqlite3.Connection, job_id: int) -> sqlite3.Row:
 
 
 def open_action_where_clause(prefix: str = "") -> str:
-    column = f"{prefix}.status" if prefix else "status"
-    return f"{column} IN ('queued', 'in_progress', 'blocked', 'rescheduled')"
+    return open_action_status_sql(prefix)
+
+
+def action_exists(
+    connection: sqlite3.Connection,
+    *,
+    company_id: int,
+    queue: str,
+    kind: str,
+    job_id: int | None = None,
+    contact_id: int | None = None,
+    artifact_id: int | None = None,
+    gap_id: int | None = None,
+) -> bool:
+    row = connection.execute(
+        """
+        SELECT 1 FROM actions
+        WHERE company_id = ?
+            AND queue = ?
+            AND kind = ?
+            AND COALESCE(job_id, -1) = COALESCE(?, -1)
+            AND COALESCE(contact_id, -1) = COALESCE(?, -1)
+            AND COALESCE(artifact_id, -1) = COALESCE(?, -1)
+            AND COALESCE(gap_id, -1) = COALESCE(?, -1)
+        LIMIT 1
+        """,
+        (company_id, queue, kind, job_id, contact_id, artifact_id, gap_id),
+    ).fetchone()
+    return row is not None
 
 
 def upsert_action(
@@ -565,6 +665,67 @@ def upsert_action(
     return int(cursor.lastrowid), True
 
 
+def upsert_generated_job_action(
+    connection: sqlite3.Connection,
+    *,
+    company_id: int,
+    job_id: int,
+    queue: str,
+    kind: str,
+    due_at: str | None = None,
+    notes: str | None = None,
+    now: str | None = None,
+) -> None:
+    if action_exists(
+        connection,
+        company_id=company_id,
+        job_id=job_id,
+        queue=queue,
+        kind=kind,
+    ):
+        return
+    upsert_action(
+        connection,
+        company_id=company_id,
+        job_id=job_id,
+        queue=queue,
+        kind=kind,
+        due_at=due_at,
+        notes=notes,
+        now=now,
+    )
+
+
+def skip_superseded_job_actions(
+    connection: sqlite3.Connection,
+    *,
+    job_id: int,
+    active_actions: set[tuple[str, str]],
+    now: str,
+) -> None:
+    for queue, kind, generated_notes in JOB_GENERATED_ACTIONS:
+        if (queue, kind) in active_actions:
+            continue
+        connection.execute(
+            f"""
+            UPDATE actions
+            SET status = 'skipped',
+                notes = CASE
+                    WHEN notes IS NULL OR notes = ''
+                        THEN 'Skipped superseded generated action.'
+                    ELSE notes || char(10) || 'Skipped superseded generated action.'
+                END,
+                updated_at = ?
+            WHERE job_id = ?
+                AND queue = ?
+                AND kind = ?
+                AND notes = ?
+                AND {open_action_where_clause()}
+            """,
+            (now, job_id, queue, kind, generated_notes),
+        )
+
+
 def log_event(
     connection: sqlite3.Connection,
     *,
@@ -620,13 +781,32 @@ def generate_job_actions(
     job = get_job(connection, job_id)
     now = now or utc_now()
     now_dt = parse_utc(now)
+    company_id = int(job["company_id"])
+    active_actions: set[tuple[str, str]] = set()
 
-    if job["status"] in ("discovered", "screening") and (
+    should_screen = job["status"] in ("discovered", "screening") and (
         job["fit_score"] is not None and int(job["fit_score"]) >= 70
-    ):
-        upsert_action(
+    )
+    if should_screen:
+        active_actions.add(("screen", "screen_role"))
+    if job["status"] == "ready_to_apply":
+        active_actions.add(("apply", "apply"))
+    if job["status"] == "applied":
+        active_actions.add(("follow_up", "follow_up"))
+    if job["status"] == "rejected" or job["rejection_reason"]:
+        active_actions.add(("classify", "classify_outcome"))
+
+    skip_superseded_job_actions(
+        connection,
+        job_id=job_id,
+        active_actions=active_actions,
+        now=now,
+    )
+
+    if should_screen:
+        upsert_generated_job_action(
             connection,
-            company_id=int(job["company_id"]),
+            company_id=company_id,
             job_id=job_id,
             queue="screen",
             kind="screen_role",
@@ -635,9 +815,9 @@ def generate_job_actions(
         )
 
     if job["status"] == "ready_to_apply":
-        upsert_action(
+        upsert_generated_job_action(
             connection,
-            company_id=int(job["company_id"]),
+            company_id=company_id,
             job_id=job_id,
             queue="apply",
             kind="apply",
@@ -647,9 +827,9 @@ def generate_job_actions(
 
     if job["status"] == "applied":
         due_at = add_business_days(now_dt, 6).isoformat()
-        upsert_action(
+        upsert_generated_job_action(
             connection,
-            company_id=int(job["company_id"]),
+            company_id=company_id,
             job_id=job_id,
             queue="follow_up",
             kind="follow_up",
@@ -659,9 +839,9 @@ def generate_job_actions(
         )
 
     if job["status"] == "rejected" or job["rejection_reason"]:
-        upsert_action(
+        upsert_generated_job_action(
             connection,
-            company_id=int(job["company_id"]),
+            company_id=company_id,
             job_id=job_id,
             queue="classify",
             kind="classify_outcome",
@@ -1183,6 +1363,13 @@ def command_action_transition(args: argparse.Namespace, status: str) -> int:
             ).fetchone()
             if action is None:
                 raise ValueError(f"Action not found: {args.action_id}")
+            if action["status"] in TERMINAL_ACTION_STATUSES:
+                if action["status"] == status:
+                    print(f"action {status} id={args.action_id}")
+                    return 0
+                raise ValueError(
+                    f"Action {args.action_id} is already terminal: {action['status']}"
+                )
             completed_at = now if status == "done" else None
             due_at = getattr(args, "due_at", None)
             connection.execute(
@@ -1192,7 +1379,14 @@ def command_action_transition(args: argparse.Namespace, status: str) -> int:
                     notes = COALESCE(?, notes), updated_at = ?
                 WHERE id = ?
                 """,
-                (status, completed_at, due_at, getattr(args, "notes", None), now, args.action_id),
+                (
+                    status,
+                    completed_at,
+                    due_at,
+                    getattr(args, "notes", None),
+                    now,
+                    args.action_id,
+                ),
             )
             log_event(
                 connection,

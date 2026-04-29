@@ -206,9 +206,9 @@ class JobSearchDatabaseTests(unittest.TestCase):
             second = self.run_cli(db_path, "init")
             status = self.run_cli(db_path, "status")
 
-            self.assertIn("schema_version=1", first.stdout)
-            self.assertIn("schema_version=1", second.stdout)
-            self.assertIn("schema_version=1", status.stdout)
+            self.assertIn("schema_version=2", first.stdout)
+            self.assertIn("schema_version=2", second.stdout)
+            self.assertIn("schema_version=2", status.stdout)
             self.assertIn("companies=0", status.stdout)
             self.assertIn("jobs=0", status.stdout)
             self.assertIn("actions=0", status.stdout)
@@ -217,8 +217,43 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 migration_count = connection.execute(
                     "SELECT COUNT(*) FROM schema_migrations"
                 ).fetchone()[0]
-                self.assertEqual(migration_count, 1)
+                self.assertEqual(migration_count, 2)
             self.assertEqual(db_path.stat().st_mode & 0o777, 0o600)
+
+    def test_init_migrates_duplicate_open_actions_before_dedupe_index(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    connection.execute("DROP INDEX idx_actions_open_dedupe")
+                    connection.execute("DELETE FROM schema_migrations WHERE version = 2")
+                    company_id = self.insert_company(connection, "Company A")
+                    self.insert_action(connection, company_id)
+                    self.insert_action(connection, company_id)
+
+            migrated = self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                actions = connection.execute(
+                    """
+                    SELECT status, notes
+                    FROM actions
+                    ORDER BY id
+                    """
+                ).fetchall()
+                versions = connection.execute(
+                    "SELECT version FROM schema_migrations ORDER BY version"
+                ).fetchall()
+                with self.assertRaises(sqlite3.IntegrityError):
+                    self.insert_action(connection, company_id)
+
+            self.assertIn("schema_version=2", migrated.stdout)
+            self.assertEqual([row[0] for row in versions], [1, 2])
+            self.assertEqual(actions[0][0], "queued")
+            self.assertEqual(actions[1][0], "skipped")
+            self.assertIn("schema v2 migration", actions[1][1])
 
     def test_status_reports_uninitialized_database_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -659,6 +694,8 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 db_path, "action", "next", "--queue", "apply", "--limit", "5"
             )
             company_show = self.run_cli(db_path, "company", "show", "Coinbase")
+            self.run_cli(db_path, "action", "done", "3")
+            self.run_cli(db_path, "job", "update", "1", "--lane", "platform")
 
             self.assertIn("job updated id=1", first_ready.stdout)
             self.assertIn("job updated id=1", second_ready.stdout)
@@ -679,19 +716,19 @@ class JobSearchDatabaseTests(unittest.TestCase):
             with closing(self.connect(db_path)) as connection:
                 action_counts = connection.execute(
                     """
-                    SELECT queue, kind, COUNT(*)
+                    SELECT queue, kind, status, COUNT(*)
                     FROM actions
-                    GROUP BY queue, kind
-                    ORDER BY queue, kind
+                    GROUP BY queue, kind, status
+                    ORDER BY queue, kind, status
                     """
                 ).fetchall()
 
             self.assertEqual(
                 action_counts,
                 [
-                    ("apply", "apply", 1),
-                    ("research", "find_contact", 1),
-                    ("screen", "screen_role", 1),
+                    ("apply", "apply", "done", 1),
+                    ("research", "find_contact", "queued", 1),
+                    ("screen", "screen_role", "skipped", 1),
                 ],
             )
 
@@ -717,15 +754,15 @@ class JobSearchDatabaseTests(unittest.TestCase):
             with closing(self.connect(db_path)) as connection:
                 generated = connection.execute(
                     """
-                    SELECT queue, kind, due_at
+                    SELECT queue, kind, status, due_at
                     FROM actions
                     ORDER BY queue, kind
                     """
                 ).fetchall()
 
-            self.assertEqual(generated[0][:2], ("classify", "classify_outcome"))
-            self.assertEqual(generated[1][:2], ("follow_up", "follow_up"))
-            self.assertIsNotNone(generated[1][2])
+            self.assertEqual(generated[0][:3], ("classify", "classify_outcome", "queued"))
+            self.assertEqual(generated[1][:3], ("follow_up", "follow_up", "skipped"))
+            self.assertIsNotNone(generated[1][3])
 
     def test_done_message_action_generates_single_follow_up(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -757,8 +794,24 @@ class JobSearchDatabaseTests(unittest.TestCase):
                     WHERE queue = 'follow_up' AND kind = 'follow_up'
                     """
                 ).fetchone()[0]
+                events = connection.execute(
+                    """
+                    SELECT event_type, COUNT(*)
+                    FROM events
+                    GROUP BY event_type
+                    ORDER BY event_type
+                    """
+                ).fetchall()
 
             self.assertEqual(follow_up_count, 1)
+            self.assertEqual(
+                events,
+                [
+                    ("action_done", 1),
+                    ("company_added", 1),
+                    ("message_sent", 1),
+                ],
+            )
 
 
 if __name__ == "__main__":
