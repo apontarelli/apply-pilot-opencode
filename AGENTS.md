@@ -228,6 +228,11 @@ OPEN_SOURCE_JOB_APPLICATION_SYSTEM/
 
 ## Verification Commands
 
+Repo validation:
+```bash
+make test
+```
+
 Character count verification:
 ```bash
 echo "Your bullet text here" | wc -c
