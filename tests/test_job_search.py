@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 import subprocess
 import sys
@@ -31,6 +32,11 @@ class JobSearchDatabaseTests(unittest.TestCase):
 
     def last_id(self, connection: sqlite3.Connection) -> int:
         return connection.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def stdout_id(self, result: subprocess.CompletedProcess[str]) -> int:
+        match = re.search(r"id=(\d+)", result.stdout)
+        self.assertIsNotNone(match, result.stdout)
+        return int(match.group(1))
 
     def insert_company(self, connection: sqlite3.Connection, name: str) -> int:
         connection.execute(
@@ -599,6 +605,249 @@ class JobSearchDatabaseTests(unittest.TestCase):
                             "DELETE FROM companies WHERE id = ?",
                             (company_id,),
                         )
+
+    def test_support_object_commands_write_company_first_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            self.run_cli(db_path, "company", "add", "Coinbase", "--tier", "1")
+            contact = self.run_cli(
+                db_path,
+                "contact",
+                "add",
+                "--company",
+                "Coinbase",
+                "--name",
+                "Avery Chen",
+                "--title",
+                "Product Director",
+                "--source",
+                "linkedin",
+                "--link",
+                "https://linkedin.example/avery",
+                "--relationship-strength",
+                "warm",
+                "--last-contacted",
+                "2026-04-27T09:00:00+00:00",
+                "--notes",
+                "Intro path through alumni network",
+            )
+            artifact = self.run_cli(
+                db_path,
+                "artifact",
+                "add",
+                "--company",
+                "Coinbase",
+                "--type",
+                "memo",
+                "--status",
+                "ready",
+                "--thesis",
+                "Ledger close automation maps to reporting platform work",
+                "--path",
+                "APPLICATIONS/Coinbase/artifact.md",
+                "--notes",
+                "Use before referral ask",
+            )
+            gap = self.run_cli(
+                db_path,
+                "gap",
+                "add",
+                "--company",
+                "Coinbase",
+                "--type",
+                "domain",
+                "--description",
+                "Need clearer crypto accounting proof",
+                "--severity",
+                "high",
+                "--resolution-action",
+                "Draft targeted artifact",
+            )
+
+            self.assertIn("contact id=", contact.stdout)
+            self.assertIn("artifact id=", artifact.stdout)
+            self.assertIn("gap id=", gap.stdout)
+
+            contacts = self.run_cli(db_path, "contact", "list", "--company", "Coinbase")
+            artifacts = self.run_cli(db_path, "artifact", "list", "--company", "Coinbase")
+            gaps = self.run_cli(db_path, "gap", "list", "--company", "Coinbase")
+
+            self.assertIn("Avery Chen", contacts.stdout)
+            self.assertIn("relationship_strength=warm", contacts.stdout)
+            self.assertIn("Ledger close automation", artifacts.stdout)
+            self.assertIn("status=ready", artifacts.stdout)
+            self.assertIn("Need clearer crypto accounting proof", gaps.stdout)
+            self.assertIn("severity=high", gaps.stdout)
+
+    def test_event_creation_and_company_history_readback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            self.run_cli(db_path, "company", "add", "Ramp", "--tier", "1")
+            job_id = self.stdout_id(
+                self.run_cli(
+                    db_path,
+                    "job",
+                    "add",
+                    "--company",
+                    "Ramp",
+                    "--title",
+                    "Senior Product Manager",
+                    "--source",
+                    "manual",
+                )
+            )
+            contact_id = self.stdout_id(
+                self.run_cli(
+                    db_path,
+                    "contact",
+                    "add",
+                    "--company",
+                    "Ramp",
+                    "--name",
+                    "Hiring Manager",
+                    "--title",
+                    "Head of Product",
+                )
+            )
+            artifact_id = self.stdout_id(
+                self.run_cli(
+                    db_path,
+                    "artifact",
+                    "add",
+                    "--company",
+                    "Ramp",
+                    "--job-id",
+                    str(job_id),
+                    "--type",
+                    "case-study",
+                    "--status",
+                    "sent",
+                    "--link",
+                    "https://example.com/ramp-case-study",
+                    "--happened-at",
+                    "2026-04-27T10:00:00+00:00",
+                )
+            )
+            gap_id = self.stdout_id(
+                self.run_cli(
+                    db_path,
+                    "gap",
+                    "add",
+                    "--company",
+                    "Ramp",
+                    "--job-id",
+                    str(job_id),
+                    "--type",
+                    "domain",
+                    "--description",
+                    "Need clearer card issuing proof",
+                    "--happened-at",
+                    "2026-04-27T11:00:00+00:00",
+                )
+            )
+            self.run_cli(
+                db_path,
+                "event",
+                "add",
+                "--company",
+                "Ramp",
+                "--type",
+                "message_sent",
+                "--contact-id",
+                str(contact_id),
+                "--happened-at",
+                "2026-04-27T09:00:00+00:00",
+            )
+            self.run_cli(
+                db_path,
+                "event",
+                "add",
+                "--company",
+                "Ramp",
+                "--type",
+                "application_submitted",
+                "--job-id",
+                str(job_id),
+                "--happened-at",
+                "2026-04-27T12:00:00+00:00",
+                "--notes",
+                "Applied with fintech resume",
+            )
+            self.run_cli(
+                db_path,
+                "event",
+                "add",
+                "--company",
+                "Ramp",
+                "--type",
+                "interview",
+                "--job-id",
+                str(job_id),
+                "--happened-at",
+                "2026-04-27T12:30:00+00:00",
+            )
+            self.run_cli(
+                db_path,
+                "event",
+                "add",
+                "--company",
+                "Ramp",
+                "--type",
+                "referral_ask",
+                "--contact-id",
+                str(contact_id),
+                "--artifact-id",
+                str(artifact_id),
+                "--happened-at",
+                "2026-04-27T13:00:00+00:00",
+            )
+            self.run_cli(
+                db_path,
+                "job",
+                "status",
+                str(job_id),
+                "rejected",
+                "--happened-at",
+                "2026-04-27T14:00:00+00:00",
+            )
+            self.run_cli(
+                db_path,
+                "gap",
+                "status",
+                str(gap_id),
+                "resolved",
+                "--resolution-action",
+                "Added card issuing proof to artifact",
+                "--happened-at",
+                "2026-04-27T15:00:00+00:00",
+            )
+
+            history = self.run_cli(db_path, "event", "list", "--company", "Ramp")
+
+            for expected in (
+                "message_sent",
+                "artifact_sent",
+                "gap_identified",
+                "application_submitted",
+                "interview",
+                "referral_ask",
+                "rejection_received",
+                "status_changed",
+                "company=Ramp",
+                "job=Senior Product Manager",
+                "contact=Hiring Manager",
+                "artifact=case-study",
+                "gap=Need clearer card issuing proof",
+            ):
+                self.assertIn(expected, history.stdout)
+            self.assertLess(
+                history.stdout.index("artifact_sent"),
+                history.stdout.index("rejection_received"),
+            )
 
     def test_help_exposes_core_command_groups(self) -> None:
         result = subprocess.run(
