@@ -28,7 +28,7 @@ Durable command-center doc:
 
 Implementation tracker:
 - Linear project: `Job Search Command Center`
-- Next Side Projects tickets: `SID-101`, `SID-102`, `SID-103`
+- Current Side Projects tickets: `SID-101`, `SID-102`, `SID-103`, `SID-104`
 
 ---
 
@@ -257,8 +257,9 @@ OPEN_SOURCE_JOB_APPLICATION_SYSTEM/
 │   └── DESIGN.md                   # Inactive design-lane placeholder
 │
 ├── docs/
-│   └── exec-plans/
-│       └── job-search-command-center.md
+│   ├── README.md                   # Docs router and source-of-truth map
+│   ├── job-search-command-center.md # Durable command-center model and workflow
+│   └── manual-smoke-tests/          # Targeted manual validation notes
 │
 ├── AGENTS.md                      # OpenCode instructions
 └── README.md                      # This file

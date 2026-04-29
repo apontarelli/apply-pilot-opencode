@@ -156,6 +156,43 @@ Noisy broad results:
 - Reject malformed metadata, people-management-heavy titles, stale/thin posts, and roles where the JD shifts away from the query intent.
 - Only jobs that survive detail validation should enter `jobs`.
 
+## LinkedIn MCP Adapter Decision
+
+SID-103 chose a hybrid adapter boundary:
+
+- Codex invokes LinkedIn MCP tools.
+- `scripts/job_search.py` remains the deterministic SQLite control layer.
+- The handoff between them is a local query-run import payload, not direct CLI access to MCP tools.
+- LinkedIn remains a discovery source; accepted jobs still flow through query-run review and existing job storage semantics.
+
+Why this boundary:
+
+- LinkedIn MCP auth, session state, and tool availability belong to the Codex runtime.
+- The CLI should stay runnable in tests and local shells without a live LinkedIn session.
+- Query-run records are the audit trail; raw LinkedIn search output is not the source of truth.
+
+Raw payload policy:
+
+- Do not persist full raw MCP payloads by default.
+- Persist stable source references, canonical URLs, LinkedIn job IDs when available, normalized result fields, result counts, and concise rejection or failure notes.
+- Allow explicit debug capture only for local troubleshooting. Debug captures must be redacted for profile/account/session data, stored outside application artifacts under `APPLICATIONS/_ops/query_runs/`, and referenced from the query run rather than copied into docs.
+- Treat raw debug captures as local-only operational evidence, not reusable application material.
+
+Failure classes for `linkedin_mcp` query runs:
+
+- `auth_required`: no usable LinkedIn authentication is available before a search starts; record the run as `failed`.
+- `session_expired`: authentication existed but the session is no longer usable; record the run as `failed` unless some results were already imported, then `partial`.
+- `mcp_unavailable`: the LinkedIn MCP tool is missing, disabled, or not reachable; record as `failed`.
+- `network_error`: transport failure, timeout, or transient service failure; record as `failed` or `partial` depending on whether usable results were captured.
+- `rate_limited`: LinkedIn or MCP throttling prevents a complete pass; record as `partial` when some results were captured, otherwise `failed`.
+- `malformed_payload`: required result fields are missing or inconsistent; reject affected rows and mark the run `partial` when the rest of the run is usable.
+- `search_noisy`: result quality is too broad for the pack/query intent; record as `completed` when reviewed, with high rejection counts and pack-tuning notes.
+- `stale_or_thin_result`: result detail is stale, closed, missing, or too thin to trust; reject affected rows.
+- `detail_validation_failed`: `get_job_details` or the canonical posting contradicts the search result; reject affected rows.
+- `partial_results`: catch-all for interrupted runs with enough normalized rows to review; record as `partial` with the more specific cause in notes.
+
+The follow-up implementation ticket is SID-104. It should wait for SID-101 query-run import support and SID-102 machine-readable query packs.
+
 ## Query Packs
 
 The default repeatable broad-search packs are:
@@ -174,12 +211,14 @@ Tracked in Linear project `Job Search Command Center`:
 - SID-101: Add query run schema and CLI import surface.
 - SID-102: Add query-pack registry with exception-pack guardrails.
 - SID-103: Groom LinkedIn MCP query adapter design.
+- SID-104: Implement LinkedIn MCP query adapter handoff.
 
 Recommended order:
 
 1. SID-102, so query-pack defaults and exception-pack rules are executable.
 2. SID-101, so manual/imported broad discovery runs have durable storage.
-3. SID-103, after the CLI/MCP boundary is clarified.
+3. SID-103, decision recorded; ready for review.
+4. SID-104, after query-run import and query-pack validation exist.
 
 ## Validation
 
