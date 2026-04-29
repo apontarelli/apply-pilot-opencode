@@ -29,10 +29,18 @@ Read base resumes only when lane fit is unclear:
 
 Read `references/query-packs.md` before running multi-query discovery.
 
-Use `scripts/job_pipeline.py` for cross-session tracking:
-- `python3 scripts/job_pipeline.py summary`
-- `python3 scripts/job_pipeline.py find --company "..." --role "..."`
-- `python3 scripts/job_pipeline.py upsert ...`
+Use `scripts/job_search.py` as the cross-session command center:
+- `python3 scripts/job_search.py init` if `status` says the database is not initialized
+- `python3 scripts/job_search.py status`
+- `python3 scripts/job_search.py company show "Company"`
+- `python3 scripts/job_search.py job list --company "Company"`
+- `python3 scripts/job_search.py action next`
+- `python3 scripts/job_search.py event list --company "Company"`
+
+Before searching listings or recommending a role, check the command center for:
+- company history, cooldowns, last applied role, last outcome, active jobs, and open actions
+- existing jobs for the company, especially duplicate titles or recent attempts
+- action history that already makes the next step clear
 
 ## Lane Priority
 
@@ -125,18 +133,22 @@ Avoid broad first-pass searches like:
 ## Batch Screening
 
 When the user wants maximum automation:
-1. read `python3 scripts/job_pipeline.py summary`
-2. search LinkedIn in batches
-3. skip roles already logged unless the user asks to revisit them
-4. validate promising roles with `get_job_details`
-5. continue directly into `$job-apply` for roles that survive the first screen
-6. log every final decision with `scripts/job_pipeline.py`
+1. run `python3 scripts/job_search.py init` first if the database is not initialized
+2. read `python3 scripts/job_search.py status`
+3. read `python3 scripts/job_search.py action next` to see pending screen/apply work
+4. check each target company with `company show`, `job list --company`, and `event list --company` before searching or validating new listings
+5. search LinkedIn in batches only after existing company/job/action history is understood
+6. skip roles already tracked unless the user asks to revisit them or new details materially change the case
+7. validate promising roles with `get_job_details`
+8. continue directly into `$job-apply` for roles that survive the first screen
+9. record every final decision with `scripts/job_search.py`
 
-Default statuses:
-- `screened_out`: pass
-- `watch`: maybe later
+Default job statuses:
+- `ignored_by_filter`: pass
+- `screening`: still evaluating
 - `ready_to_apply`: worth handing off to Antonio for the final human application
 - `applied`: Antonio confirms he submitted
+- `rejected`, `closed`, or `archived`: known terminal outcomes
 
 The skill should not stop at a shortlist if the user asked for end-to-end vetting.
 
@@ -146,17 +158,22 @@ The skill should not stop at a shortlist if the user asked for end-to-end vettin
    - search for roles
    - validate a specific role
    - normalize a LinkedIn URL into JD text
-2. Map the request to likely lanes:
+2. Check command-center history before searching:
+   - run `python3 scripts/job_search.py init` first if the database is not initialized
+   - `python3 scripts/job_search.py status`
+   - `python3 scripts/job_search.py action next`
+   - for each known company, run `company show`, `job list --company`, and `event list --company`
+3. Map the request to likely lanes:
    - `FINTECH`
    - `AI`
    - `INDUSTRIAL`
    - mixed / unclear bridge search
-3. Use LinkedIn MCP to gather only the minimum needed:
+4. Use LinkedIn MCP to gather only the minimum needed:
    - `search_jobs` for discovery
    - `get_job_details` for a specific posting
    - `get_company_profile` for brief company context
    - `search_people` for likely hiring-manager or recruiter context when useful
-4. Produce a compact decision:
+5. Produce a compact decision:
    - likely lane
    - interest level
    - comp signal when available
@@ -164,9 +181,9 @@ The skill should not stop at a shortlist if the user asked for end-to-end vettin
    - why it fits
    - biggest mismatch or risk
    - whether to pass, low-priority apply, or strong-fit apply
-5. If the user asked for search-only, stop at the shortlist and log the decision.
-6. If the user asked for search + vetting, continue directly into `$job-apply` for each surviving role.
-7. Normalize the role into a reusable packet for `$job-apply`:
+6. If the user asked for search-only, stop at the shortlist and record the decision.
+7. If the user asked for search + vetting, continue directly into `$job-apply` for each surviving role.
+8. Normalize the role into a reusable packet for `$job-apply`:
    - company
    - role title
    - location / remote status if available
@@ -213,10 +230,11 @@ Discard or down-rank results when:
 
 Validate at least the most promising hits with `get_job_details` before calling them high-signal.
 
-Before recommending or screening a role, check whether it is already in the pipeline:
-- if already `ready_to_apply`, do not re-vet unless the user asks
-- if already `screened_out`, skip unless there is a concrete reason to revisit
-- if already `watch`, only re-open it when the new query or JD details materially change the case
+Before recommending or screening a role, check whether it is already in the command center:
+- if the company is in cooldown, do not reopen it unless the role is materially different or strategically important
+- if the job is already `ready_to_apply`, do not re-vet unless the user asks
+- if the job is already `ignored_by_filter`, `closed`, or `archived`, skip unless there is a concrete reason to revisit
+- if open actions already exist, finish or update those actions before creating duplicate work
 
 ## Validation Standards
 
@@ -240,28 +258,32 @@ Pass quickly when:
 
 ## Logging
 
-Every screened role should end with a ledger write through `scripts/job_pipeline.py`.
+Every screened role should end with command-center writes through `scripts/job_search.py`.
 
 Minimum fields:
 - `company`
-- `role`
+- `job title`
 - `status`
 - `lane`
-- `interest_level`
-- `comp_signal`
-- `recommendation`
-- `job_url`
-- `search_query`
-- `risks`
+- `fit_score` or concise fit/risk notes when available
+- `compensation_signal`
+- `recommended_resume`
+- `canonical_url`
+- `application_folder` or material paths when saved
 
 Use:
-- `screened_out` for passes
-- `watch` for plausible but not worth immediate effort
+- `ignored_by_filter` for passes
+- company `watch` or action notes for plausible but deferred targets
 - `ready_to_apply` when the role should be handed off to Antonio
+- `applied` when Antonio confirms submission
+- `rejected`, `closed`, or `archived` when the outcome is known
 
-Write or update:
-- `APPLICATIONS/_ops/job_pipeline.jsonl`
-- `APPLICATIONS/_ops/JOB_PIPELINE.md`
+Common writes:
+- `python3 scripts/job_search.py company add "Company" ...`
+- `python3 scripts/job_search.py job add "Company" "Role" --url "..." ...`
+- `python3 scripts/job_search.py job status <job_id> ready_to_apply --notes "..."`
+- `python3 scripts/job_search.py event add --company "Company" --job-id <job_id> --type note --notes "..."`
+- `python3 scripts/job_search.py action done <action_id> --notes "..."`
 
 ## Handoff To `$job-apply`
 
