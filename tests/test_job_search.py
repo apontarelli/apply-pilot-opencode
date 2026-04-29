@@ -849,6 +849,154 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 history.stdout.index("rejection_received"),
             )
 
+    def test_artifact_status_can_complete_idea_with_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            self.run_cli(db_path, "company", "add", "Stripe")
+            artifact_id = self.stdout_id(
+                self.run_cli(
+                    db_path,
+                    "artifact",
+                    "add",
+                    "--company",
+                    "Stripe",
+                    "--type",
+                    "memo",
+                )
+            )
+            updated = self.run_cli(
+                db_path,
+                "artifact",
+                "status",
+                str(artifact_id),
+                "ready",
+                "--path",
+                "APPLICATIONS/Stripe/memo.md",
+            )
+
+            artifacts = self.run_cli(db_path, "artifact", "list", "--company", "Stripe")
+
+            self.assertIn(f"artifact id={artifact_id} status=ready", updated.stdout)
+            self.assertIn("status=ready", artifacts.stdout)
+            self.assertIn("path=APPLICATIONS/Stripe/memo.md", artifacts.stdout)
+
+    def test_backfilled_events_preserve_latest_company_touch_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            self.run_cli(db_path, "company", "add", "Mercury")
+            self.run_cli(
+                db_path,
+                "event",
+                "add",
+                "--company",
+                "Mercury",
+                "--type",
+                "interview",
+                "--happened-at",
+                "2026-04-27T14:00:00+00:00",
+            )
+            self.run_cli(
+                db_path,
+                "event",
+                "add",
+                "--company",
+                "Mercury",
+                "--type",
+                "coffee_chat",
+                "--happened-at",
+                "2026-04-26T09:00:00+00:00",
+            )
+
+            company = self.run_cli(db_path, "company", "show", "Mercury")
+
+            self.assertIn("last_touched_at=2026-04-27T14:00:00+00:00", company.stdout)
+
+    def test_event_limit_returns_recent_history_in_chronological_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            self.run_cli(db_path, "company", "add", "Brex")
+            for day in (25, 26, 27):
+                self.run_cli(
+                    db_path,
+                    "event",
+                    "add",
+                    "--company",
+                    "Brex",
+                    "--type",
+                    "note",
+                    "--happened-at",
+                    f"2026-04-{day}T09:00:00+00:00",
+                    "--notes",
+                    f"day-{day}",
+                )
+
+            history = self.run_cli(db_path, "event", "list", "--company", "Brex", "--limit", "2")
+
+            self.assertNotIn("day-25", history.stdout)
+            self.assertLess(history.stdout.index("day-26"), history.stdout.index("day-27"))
+
+    def test_gap_list_orders_high_severity_first(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            self.run_cli(db_path, "company", "add", "Plaid")
+            for severity in ("low", "high", "medium"):
+                self.run_cli(
+                    db_path,
+                    "gap",
+                    "add",
+                    "--company",
+                    "Plaid",
+                    "--type",
+                    "domain",
+                    "--description",
+                    f"{severity} severity proof gap",
+                    "--severity",
+                    severity,
+                )
+
+            gaps = self.run_cli(db_path, "gap", "list", "--company", "Plaid")
+
+            self.assertLess(
+                gaps.stdout.index("high severity proof gap"),
+                gaps.stdout.index("medium severity proof gap"),
+            )
+            self.assertLess(
+                gaps.stdout.index("medium severity proof gap"),
+                gaps.stdout.index("low severity proof gap"),
+            )
+
+    def test_job_add_initial_lifecycle_status_records_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            self.run_cli(db_path, "company", "add", "Rippling")
+            job = self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "--company",
+                "Rippling",
+                "--title",
+                "Senior Product Manager",
+                "--status",
+                "applied",
+            )
+
+            history = self.run_cli(db_path, "event", "list", "--company", "Rippling")
+
+            self.assertIn("job id=", job.stdout)
+            self.assertIn("application_submitted", history.stdout)
+            self.assertIn("job=Senior Product Manager", history.stdout)
+
     def test_help_exposes_core_command_groups(self) -> None:
         result = subprocess.run(
             [sys.executable, str(CLI), "--help"],

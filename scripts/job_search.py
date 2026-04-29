@@ -523,10 +523,14 @@ def touch_company(
     connection.execute(
         """
         UPDATE companies
-        SET last_touched_at = ?, updated_at = ?
+        SET last_touched_at = CASE
+                WHEN last_touched_at IS NULL OR last_touched_at < ? THEN ?
+                ELSE last_touched_at
+            END,
+            updated_at = ?
         WHERE id = ?
         """,
-        (touch_at, now, company_id),
+        (touch_at, touch_at, now, company_id),
     )
 
 
@@ -716,6 +720,8 @@ def parse_args() -> argparse.Namespace:
     artifact_status = artifact_subparsers.add_parser("status", help="Update artifact status.")
     artifact_status.add_argument("artifact_id", type=int)
     artifact_status.add_argument("status", choices=ARTIFACT_STATUSES)
+    artifact_status.add_argument("--link")
+    artifact_status.add_argument("--path")
     artifact_status.add_argument("--happened-at")
     artifact_status.add_argument("--notes")
 
@@ -920,7 +926,16 @@ def command_job(args: argparse.Namespace) -> int:
                     ),
                 )
                 job_id = int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
-                touch_company(connection, company_id)
+                if args.status == "discovered":
+                    touch_company(connection, company_id)
+                else:
+                    insert_event(
+                        connection,
+                        company_id=company_id,
+                        job_id=job_id,
+                        event_type=event_type_for_job_status(args.status),
+                        notes=f"job #{job_id} status initialized: {args.status}",
+                    )
             print_row_summary("job", job_id)
             return 0
 
@@ -1144,10 +1159,17 @@ def command_artifact(args: argparse.Namespace) -> int:
         if args.artifact_command == "status":
             row = require_row(
                 connection,
-                "SELECT company_id, job_id, status FROM artifacts WHERE id = ?",
+                "SELECT company_id, job_id, status, link, path FROM artifacts WHERE id = ?",
                 (args.artifact_id,),
                 f"Artifact not found: {args.artifact_id}",
             )
+            if (
+                args.status not in ("idea", "queued", "drafting")
+                and not (args.link or args.path or row["link"] or row["path"])
+            ):
+                raise ValueError(
+                    f"artifact status {args.status} requires an existing link/path or --link/--path"
+                )
             now = utc_now()
             notes = (
                 args.notes
@@ -1155,8 +1177,13 @@ def command_artifact(args: argparse.Namespace) -> int:
             )
             with connection:
                 connection.execute(
-                    "UPDATE artifacts SET status = ?, updated_at = ? WHERE id = ?",
-                    (args.status, now, args.artifact_id),
+                    """
+                    UPDATE artifacts
+                    SET status = ?, link = COALESCE(?, link), path = COALESCE(?, path),
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (args.status, args.link, args.path, now, args.artifact_id),
                 )
                 event_id = insert_event(
                     connection,
@@ -1240,7 +1267,15 @@ def command_gap(args: argparse.Namespace) -> int:
                 LEFT JOIN companies
                     ON companies.id = COALESCE(gaps.company_id, jobs.company_id)
                 {where}
-                ORDER BY gaps.severity DESC, gaps.updated_at DESC, gaps.id DESC
+                ORDER BY
+                    CASE gaps.severity
+                        WHEN 'high' THEN 3
+                        WHEN 'medium' THEN 2
+                        WHEN 'low' THEN 1
+                        ELSE 0
+                    END DESC,
+                    gaps.updated_at DESC,
+                    gaps.id DESC
                 """,
                 tuple(parameters),
             ).fetchall()
@@ -1305,26 +1340,25 @@ def read_events(
         where = "WHERE events.company_id = ?"
         parameters.append(company_id)
     parameters.append(limit)
-    return list(
-        connection.execute(
-            f"""
-            SELECT events.*, companies.name AS company_name, jobs.title AS job_title,
-                contacts.name AS contact_name, artifacts.type AS artifact_type,
-                gaps.description AS gap_description, actions.kind AS action_kind
-            FROM events
-            JOIN companies ON companies.id = events.company_id
-            LEFT JOIN jobs ON jobs.id = events.job_id
-            LEFT JOIN contacts ON contacts.id = events.contact_id
-            LEFT JOIN artifacts ON artifacts.id = events.artifact_id
-            LEFT JOIN gaps ON gaps.id = events.gap_id
-            LEFT JOIN actions ON actions.id = events.action_id
-            {where}
-            ORDER BY events.happened_at ASC, events.id ASC
-            LIMIT ?
-            """,
-            tuple(parameters),
-        ).fetchall()
-    )
+    rows = connection.execute(
+        f"""
+        SELECT events.*, companies.name AS company_name, jobs.title AS job_title,
+            contacts.name AS contact_name, artifacts.type AS artifact_type,
+            gaps.description AS gap_description, actions.kind AS action_kind
+        FROM events
+        JOIN companies ON companies.id = events.company_id
+        LEFT JOIN jobs ON jobs.id = events.job_id
+        LEFT JOIN contacts ON contacts.id = events.contact_id
+        LEFT JOIN artifacts ON artifacts.id = events.artifact_id
+        LEFT JOIN gaps ON gaps.id = events.gap_id
+        LEFT JOIN actions ON actions.id = events.action_id
+        {where}
+        ORDER BY events.happened_at DESC, events.id DESC
+        LIMIT ?
+        """,
+        tuple(parameters),
+    ).fetchall()
+    return list(reversed(rows))
 
 
 def command_event(args: argparse.Namespace) -> int:
