@@ -19,6 +19,7 @@ from urllib.request import Request, urlopen
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = REPO_ROOT / "APPLICATIONS" / "_ops" / "job_search.sqlite"
+DEFAULT_PIPELINE_PATH = REPO_ROOT / "APPLICATIONS" / "_ops" / "job_pipeline.jsonl"
 SCHEMA_VERSION = 3
 OPEN_ACTION_STATUSES = ("queued", "in_progress", "blocked", "rescheduled")
 TERMINAL_ACTION_STATUSES = ("done", "skipped")
@@ -1061,6 +1062,235 @@ def read_status(db_path: Path) -> dict[str, int | str]:
         "jobs": jobs,
         "actions": actions,
     }
+
+
+def pipeline_status_to_job_status(status: str | None) -> str:
+    if status == "ready_to_apply":
+        return "ready_to_apply"
+    if status == "applied":
+        return "applied"
+    if status in ("screened_out", "skipped"):
+        return "ignored_by_filter"
+    return "discovered"
+
+
+def resume_for_legacy_lane(lane: str | None) -> str | None:
+    if lane == "FINTECH":
+        return "YOUR_PROFILE/Fintech/FINTECH.md"
+    if lane == "AI":
+        return "YOUR_PROFILE/AI/AI.md"
+    if lane == "ACCESS":
+        return "YOUR_PROFILE/Access/ACCESS.md"
+    if lane == "DESIGN":
+        return "YOUR_PROFILE/DESIGN.md"
+    if lane == "MEDIA_PLATFORM":
+        return "YOUR_PROFILE/Media Platform/Antonio_Pontarelli_Resume.pdf"
+    return None
+
+
+def legacy_material_paths(record: dict[str, object]) -> str | None:
+    paths = {
+        key: value
+        for key, value in {
+            "jd": record.get("jd_path"),
+            "qa": record.get("qa_path"),
+            "coverletter": record.get("coverletter_path"),
+        }.items()
+        if isinstance(value, str) and value.strip()
+    }
+    return json.dumps(paths, sort_keys=True) if paths else None
+
+
+def legacy_application_folder(record: dict[str, object]) -> str | None:
+    for key in ("jd_path", "qa_path", "coverletter_path"):
+        value = record.get(key)
+        if isinstance(value, str) and value.strip():
+            return str(Path(value).parent)
+    return None
+
+
+def legacy_note(record: dict[str, object]) -> str | None:
+    note_parts = []
+    for key in (
+        "status",
+        "summary",
+        "why_now",
+        "risks",
+        "notes",
+        "user_action",
+        "search_query",
+        "bucket",
+        "query_pack",
+    ):
+        value = record.get(key)
+        if isinstance(value, str) and value.strip():
+            note_parts.append(f"{key}: {value.strip()}")
+    return "\n".join(note_parts) if note_parts else None
+
+
+def ensure_legacy_company(
+    connection: sqlite3.Connection,
+    *,
+    record: dict[str, object],
+    now: str,
+) -> tuple[int, bool]:
+    company_name = str(record.get("company") or "").strip()
+    if not company_name:
+        raise ValueError("legacy pipeline record is missing company")
+    row = connection.execute(
+        "SELECT id FROM companies WHERE name_key = ?",
+        (company_name_key(company_name),),
+    ).fetchone()
+    if row is not None:
+        return int(row["id"]), False
+
+    cursor = connection.execute(
+        """
+        INSERT INTO companies(
+            name, name_key, lanes, status, notes, created_at, updated_at
+        )
+        VALUES (?, ?, ?, 'active', ?, ?, ?)
+        """,
+        (
+            company_name,
+            company_name_key(company_name),
+            record.get("lane") if record.get("lane") != "PASS" else None,
+            "Imported from legacy job pipeline.",
+            now,
+            now,
+        ),
+    )
+    company_id = int(cursor.lastrowid)
+    log_event(
+        connection,
+        company_id=company_id,
+        event_type="company_added",
+        notes=f"Imported {company_name} from legacy job pipeline",
+        happened_at=str(record.get("created_at") or now),
+        now=now,
+    )
+    return company_id, True
+
+
+def import_legacy_record(
+    connection: sqlite3.Connection,
+    *,
+    record: dict[str, object],
+    now: str,
+) -> tuple[str, int | None, bool]:
+    company_id, company_created = ensure_legacy_company(
+        connection,
+        record=record,
+        now=now,
+    )
+    title = str(record.get("role") or "").strip()
+    if not title:
+        raise ValueError("legacy pipeline record is missing role")
+
+    legacy_status = str(record.get("status") or "")
+    job_status = pipeline_status_to_job_status(legacy_status)
+    source = str(record.get("source") or "legacy_pipeline").strip() or "legacy_pipeline"
+    source_job_id = str(record.get("id") or "").strip() or None
+    canonical_url = normalize_url(
+        str(record.get("job_url")).strip()
+        if isinstance(record.get("job_url"), str)
+        else None
+    )
+    location = (
+        str(record.get("location")).strip()
+        if isinstance(record.get("location"), str) and str(record.get("location")).strip()
+        else None
+    )
+    duplicate_matches = job_duplicate_matches(
+        connection,
+        company_id=company_id,
+        title=title,
+        canonical_url=canonical_url,
+        source=source,
+        source_job_id=source_job_id,
+        location=location,
+        remote_status=None,
+        now=now,
+    )
+    if duplicate_matches:
+        return "skipped_duplicate", None, company_created
+
+    created_at = str(record.get("created_at") or now)
+    updated_at = str(record.get("updated_at") or record.get("last_screened_at") or now)
+    material_paths = legacy_material_paths(record)
+    cursor = connection.execute(
+        """
+        INSERT INTO jobs(
+            company_id, title, canonical_url, source, source_job_id, location,
+            lane, status, discovery_status, recommended_resume, materials_status,
+            application_folder, material_paths, application_outcome, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            company_id,
+            title,
+            canonical_url,
+            source,
+            source_job_id,
+            location,
+            record.get("lane"),
+            job_status,
+            f"legacy_pipeline:{legacy_status}" if legacy_status else "legacy_pipeline",
+            resume_for_legacy_lane(
+                record.get("lane") if isinstance(record.get("lane"), str) else None
+            ),
+            "ready" if material_paths else None,
+            legacy_application_folder(record),
+            material_paths,
+            record.get("recommendation"),
+            created_at,
+            updated_at,
+        ),
+    )
+    job_id = int(cursor.lastrowid)
+    generate_job_actions(connection, job_id=job_id, now=now)
+    event_time = str(record.get("last_screened_at") or record.get("updated_at") or now)
+    log_event(
+        connection,
+        company_id=company_id,
+        job_id=job_id,
+        event_type="job_added",
+        happened_at=created_at,
+        notes=f"Imported from legacy job pipeline: {record.get('id') or title}",
+        now=now,
+    )
+    if job_status == "applied":
+        log_event(
+            connection,
+            company_id=company_id,
+            job_id=job_id,
+            event_type="application_submitted",
+            happened_at=event_time,
+            notes=legacy_note(record) or "legacy status: applied",
+            now=now,
+        )
+    elif job_status == "ready_to_apply":
+        log_event(
+            connection,
+            company_id=company_id,
+            job_id=job_id,
+            event_type="status_changed",
+            happened_at=event_time,
+            notes=legacy_note(record) or "legacy status: ready_to_apply",
+            now=now,
+        )
+    else:
+        log_event(
+            connection,
+            company_id=company_id,
+            job_id=job_id,
+            event_type="note",
+            happened_at=event_time,
+            notes=legacy_note(record) or f"legacy status: {legacy_status or 'unknown'}",
+            now=now,
+        )
+    return "imported", job_id, company_created
 
 
 def require_database(db_path: Path) -> None:
@@ -3134,6 +3364,15 @@ def parse_args() -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("init", help="Create or migrate the job search database.")
     subparsers.add_parser("status", help="Read a smoke summary from the database.")
+    import_pipeline = subparsers.add_parser(
+        "import-pipeline",
+        help="Import legacy job_pipeline.jsonl records into SQLite.",
+    )
+    import_pipeline.add_argument(
+        "--path",
+        default=str(DEFAULT_PIPELINE_PATH),
+        help="Legacy job_pipeline.jsonl path.",
+    )
 
     company = subparsers.add_parser("company", help="Manage target companies.")
     company_subparsers = company.add_subparsers(
@@ -3360,6 +3599,56 @@ def command_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_import_pipeline(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    pipeline_path = Path(args.path)
+    if not pipeline_path.exists():
+        raise FileNotFoundError(f"Legacy pipeline file not found: {pipeline_path}")
+
+    require_database(db_path)
+    now = utc_now()
+    imported = 0
+    skipped_duplicates = 0
+    companies_created = 0
+    line_number = 0
+    with closing(connect(db_path)) as connection:
+        with connection:
+            for line_number, line in enumerate(
+                pipeline_path.read_text(encoding="utf-8").splitlines(),
+                start=1,
+            ):
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError as error:
+                    raise ValueError(
+                        f"Invalid JSON on line {line_number}: {error.msg}"
+                    ) from error
+                if not isinstance(record, dict):
+                    raise ValueError(
+                        f"Invalid record on line {line_number}: expected object"
+                    )
+                status, _, company_created = import_legacy_record(
+                    connection,
+                    record=record,
+                    now=now,
+                )
+                if company_created:
+                    companies_created += 1
+                if status == "imported":
+                    imported += 1
+                elif status == "skipped_duplicate":
+                    skipped_duplicates += 1
+
+    print(
+        "legacy pipeline import "
+        f"path={pipeline_path} lines={line_number} companies_created={companies_created} "
+        f"jobs_imported={imported} duplicates_skipped={skipped_duplicates}"
+    )
+    return 0
+
+
 def main() -> int:
     args = parse_args()
     try:
@@ -3367,6 +3656,8 @@ def main() -> int:
             return command_init(args)
         if args.command == "status":
             return command_status(args)
+        if args.command == "import-pipeline":
+            return command_import_pipeline(args)
         if args.command == "company":
             if args.company_command == "add":
                 return command_company_add(args)

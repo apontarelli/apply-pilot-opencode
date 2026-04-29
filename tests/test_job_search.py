@@ -277,6 +277,205 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertIn("Database not initialized:", result.stderr)
             self.assertNotIn("Traceback", result.stderr)
 
+    def test_import_pipeline_preserves_legacy_roles_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            pipeline_path = Path(tmpdir) / "job_pipeline.jsonl"
+            records = [
+                {
+                    "id": "url:https://example.com/stripe-baas",
+                    "company": "Stripe",
+                    "role": "Product Manager, Banking as a Service",
+                    "status": "ready_to_apply",
+                    "lane": "FINTECH",
+                    "source": "linkedin",
+                    "job_url": "https://example.com/stripe-baas?ref=linkedin",
+                    "location": "United States (Remote)",
+                    "recommendation": "apply",
+                    "summary": "Financial infrastructure role.",
+                    "risks": "Direct issuing depth is lighter.",
+                    "jd_path": "APPLICATIONS/READY_TO_APPLY/Stripe_PM/JD.md",
+                    "qa_path": "APPLICATIONS/READY_TO_APPLY/Stripe_PM/QA.md",
+                    "created_at": "2026-04-22T03:41:35+00:00",
+                    "updated_at": "2026-04-22T04:13:15+00:00",
+                    "last_screened_at": "2026-04-22T04:13:15+00:00",
+                },
+                {
+                    "id": "url:https://example.com/stripe-payments",
+                    "company": "Stripe",
+                    "role": "Product Manager, Payments",
+                    "status": "watch",
+                    "lane": "FINTECH",
+                    "source": "linkedin",
+                    "job_url": "https://example.com/stripe-payments",
+                    "recommendation": "low-priority_apply",
+                    "created_at": "2026-04-22T03:41:35+00:00",
+                    "updated_at": "2026-04-22T04:13:15+00:00",
+                },
+                {
+                    "id": "url:https://example.com/amazon-pv",
+                    "company": "Amazon",
+                    "role": "Senior Product Manager - Tech, Prime Video Financial Systems",
+                    "status": "applied",
+                    "lane": "FINTECH",
+                    "source": "amazon_jobs",
+                    "job_url": "https://example.com/amazon-pv",
+                    "recommendation": "apply",
+                    "user_action": "Applied.",
+                    "created_at": "2026-04-27T00:57:33+00:00",
+                    "updated_at": "2026-04-27T01:03:25+00:00",
+                    "last_screened_at": "2026-04-27T01:03:25+00:00",
+                },
+                {
+                    "id": "url:https://example.com/relo",
+                    "company": "Relo Metrics",
+                    "role": "Senior Product Manager",
+                    "status": "screened_out",
+                    "lane": "PASS",
+                    "source": "linkedin",
+                    "job_url": "https://example.com/relo",
+                    "recommendation": "pass",
+                    "risks": "Comp below floor.",
+                    "created_at": "2026-04-28T21:50:20+00:00",
+                    "updated_at": "2026-04-28T21:50:41+00:00",
+                },
+            ]
+            pipeline_path.write_text(
+                "\n".join(json.dumps(record) for record in records),
+                encoding="utf-8",
+            )
+
+            self.run_cli(db_path, "init")
+            first = self.run_cli(
+                db_path,
+                "import-pipeline",
+                "--path",
+                str(pipeline_path),
+            )
+            second = self.run_cli(
+                db_path,
+                "import-pipeline",
+                "--path",
+                str(pipeline_path),
+            )
+
+            self.assertIn("companies_created=3", first.stdout)
+            self.assertIn("jobs_imported=4", first.stdout)
+            self.assertIn("duplicates_skipped=0", first.stdout)
+            self.assertIn("companies_created=0", second.stdout)
+            self.assertIn("jobs_imported=0", second.stdout)
+            self.assertIn("duplicates_skipped=4", second.stdout)
+
+            with closing(self.connect(db_path)) as connection:
+                jobs = connection.execute(
+                    """
+                    SELECT companies.name, jobs.title, jobs.status, jobs.lane,
+                        jobs.recommended_resume, jobs.materials_status,
+                        jobs.application_folder
+                    FROM jobs
+                    JOIN companies ON companies.id = jobs.company_id
+                    ORDER BY companies.name, jobs.title
+                    """
+                ).fetchall()
+                actions = connection.execute(
+                    """
+                    SELECT companies.name, jobs.title, actions.queue, actions.kind
+                    FROM actions
+                    JOIN companies ON companies.id = actions.company_id
+                    LEFT JOIN jobs ON jobs.id = actions.job_id
+                    ORDER BY companies.name, jobs.title, actions.queue
+                    """
+                ).fetchall()
+                events = connection.execute(
+                    """
+                    SELECT companies.name, jobs.title, events.event_type, events.notes
+                    FROM events
+                    JOIN companies ON companies.id = events.company_id
+                    LEFT JOIN jobs ON jobs.id = events.job_id
+                    WHERE events.event_type <> 'company_added'
+                    ORDER BY companies.name, jobs.title, events.event_type
+                    """
+                ).fetchall()
+
+            self.assertEqual(
+                jobs,
+                [
+                    (
+                        "Amazon",
+                        "Senior Product Manager - Tech, Prime Video Financial Systems",
+                        "applied",
+                        "FINTECH",
+                        "YOUR_PROFILE/Fintech/FINTECH.md",
+                        None,
+                        None,
+                    ),
+                    (
+                        "Relo Metrics",
+                        "Senior Product Manager",
+                        "ignored_by_filter",
+                        "PASS",
+                        None,
+                        None,
+                        None,
+                    ),
+                    (
+                        "Stripe",
+                        "Product Manager, Banking as a Service",
+                        "ready_to_apply",
+                        "FINTECH",
+                        "YOUR_PROFILE/Fintech/FINTECH.md",
+                        "ready",
+                        "APPLICATIONS/READY_TO_APPLY/Stripe_PM",
+                    ),
+                    (
+                        "Stripe",
+                        "Product Manager, Payments",
+                        "discovered",
+                        "FINTECH",
+                        "YOUR_PROFILE/Fintech/FINTECH.md",
+                        None,
+                        None,
+                    ),
+                ],
+            )
+            self.assertEqual(
+                actions,
+                [
+                    (
+                        "Amazon",
+                        "Senior Product Manager - Tech, Prime Video Financial Systems",
+                        "follow_up",
+                        "follow_up",
+                    ),
+                    (
+                        "Stripe",
+                        "Product Manager, Banking as a Service",
+                        "apply",
+                        "apply",
+                    ),
+                ],
+            )
+            self.assertTrue(
+                any(
+                    row[0] == "Amazon"
+                    and row[1] == "Senior Product Manager - Tech, Prime Video Financial Systems"
+                    and row[2] == "application_submitted"
+                    and "status: applied" in (row[3] or "")
+                    and "user_action: Applied." in (row[3] or "")
+                    for row in events
+                )
+            )
+            self.assertTrue(
+                any(
+                    row[0] == "Stripe"
+                    and row[1] == "Product Manager, Banking as a Service"
+                    and row[2] == "status_changed"
+                    and "status: ready_to_apply" in (row[3] or "")
+                    and "summary: Financial infrastructure role." in (row[3] or "")
+                    for row in events
+                )
+            )
+
     def test_schema_enforces_core_uniqueness_and_relationships(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "job_search.sqlite"
@@ -1045,6 +1244,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
         for command in (
             "init",
             "status",
+            "import-pipeline",
             "company",
             "job",
             "contact",

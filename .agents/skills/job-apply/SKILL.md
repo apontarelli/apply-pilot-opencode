@@ -32,9 +32,12 @@ Use this skill for live application routing and answer drafting once the JD is a
 
 Read `YOUR_PROFILE/USER_BULLETS.md` only if you need supporting proof beyond the base resume.
 
-Use `scripts/job_pipeline.py` to keep cross-session state current:
-- `python3 scripts/job_pipeline.py summary`
-- `python3 scripts/job_pipeline.py upsert ...`
+Use `scripts/job_search.py` to keep cross-session state current:
+- `python3 scripts/job_search.py status`
+- `python3 scripts/job_search.py company show "Company"`
+- `python3 scripts/job_search.py job list --company "Company"`
+- `python3 scripts/job_search.py action next --queue apply`
+- `python3 scripts/job_search.py event list --company "Company"`
 
 If the user only has a LinkedIn URL, wants to search for roles, or needs job validation before applying, use `$job-search` first.
 
@@ -66,10 +69,10 @@ If the user only has a LinkedIn URL, wants to search for roles, or needs job val
    - `APPLICATIONS/READY_TO_APPLY/<Company>_<Role>/QA.md`
    - `APPLICATIONS/READY_TO_APPLY/<Company>_<Role>/COVERLETTER.md`
    - optional DOCX outputs when requested
-7. Update the pipeline ledger:
+7. Update the command-center ledger:
    - `ready_to_apply` when the role should be handed to Antonio for the final application
-   - `screened_out` when the role does not survive deeper vetting
-   - `watch` when the role is plausible but not worth immediate effort
+   - `ignored_by_filter` when the role does not survive deeper vetting
+   - `discovered` or `screening` when the role is plausible but not worth immediate submission
 8. If Antonio later says he submitted, update the ledger to `applied`
 
 Assume the JD came from one of:
@@ -189,6 +192,6 @@ If yes, update one of:
 - `YOUR_PROFILE/USER_PROFILE.md`
 - `YOUR_PROFILE/USER_BULLETS.md`
 
-Also update `scripts/job_pipeline.py` outputs when the recurring issue is pipeline-related.
+Also update `scripts/job_search.py` outputs when the recurring issue is pipeline-related.
 
 Do not let repo maintenance block the immediate application task.

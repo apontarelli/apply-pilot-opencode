@@ -293,7 +293,7 @@ Status: complete for the role-first JSONL workflow.
 Cutover changes:
 
 - Removed the active `scripts/job_pipeline.py` command path.
-- No legacy `APPLICATIONS/_ops/job_pipeline.jsonl` or `APPLICATIONS/_ops/JOB_PIPELINE.md` files existed in this workspace at cutover time, so there were no records to migrate.
+- Added `python3 scripts/job_search.py import-pipeline` for workspaces that still have legacy `APPLICATIONS/_ops/job_pipeline.jsonl` records.
 - Updated `$job-search`, `YOUR_PROFILE/APPLICATION_PLAYBOOK.md`, and `README.md` to use the company-first SQLite command center.
 
 Historical references to the old pipeline may remain only in superseded exec plans.

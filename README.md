@@ -158,11 +158,12 @@ Core commands:
 - `python3 scripts/job_search.py job list --company "Company"`
 - `python3 scripts/job_search.py action next`
 - `python3 scripts/job_search.py event list --company "Company"`
+- `python3 scripts/job_search.py import-pipeline` when a legacy `APPLICATIONS/_ops/job_pipeline.jsonl` file exists
 
 V1.1 adds explicit, optional ATS-native target-company polling through configured Greenhouse, Lever, and Ashby sources. Broad LinkedIn polling remains lower priority because it is noisier and more brittle.
 Configured `target_roles` drive screen-action creation; jobs outside those role targets are still stored as `ignored_by_filter`.
 
-Cutover note: no legacy `APPLICATIONS/_ops/job_pipeline.jsonl` or `APPLICATIONS/_ops/JOB_PIPELINE.md` files were present in this workspace, so there were no useful records to migrate. The old `scripts/job_pipeline.py` JSONL workflow has been removed.
+Cutover note: the old `scripts/job_pipeline.py` JSONL workflow has been removed. If a workspace still has legacy `APPLICATIONS/_ops/job_pipeline.jsonl` records, run `python3 scripts/job_search.py import-pipeline` once to migrate them into SQLite; the import is safe to rerun and skips duplicates.
 
 ---
 
