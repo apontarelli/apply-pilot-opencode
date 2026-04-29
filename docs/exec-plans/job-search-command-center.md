@@ -269,6 +269,168 @@ Duplicate rules:
 - Repost:
   - likely duplicate where prior job is closed or older than 60 days
 
+## Broad Job-board Query Workflow
+
+Status: v1 decision for `SID-100`.
+
+Chosen strategy: hybrid, with source-gated query packs.
+
+Use two repeatable discovery motions:
+
+- Source-first for known target companies:
+  - run configured official ATS sources through `source` and `poll`
+  - prefer Greenhouse, Lever, and Ashby APIs before official career pages
+  - use official company career pages only as manual/browser fallback when no ATS source is configured
+- Query-pack-first within each broad source adapter:
+  - run explicit `FINTECH` and `AI` packs against LinkedIn MCP or another board source
+  - keep `ACCESS` and other variants as role-specific exception packs when a posting or target-company source warrants them
+  - record one query run per source and pack before accepting or rejecting jobs
+  - validate promising broad-source hits through the canonical posting before adding them as jobs
+
+Rejected alternatives:
+
+- Source-first only:
+  - too reliable-but-narrow for discovery beyond the configured company list
+  - misses high-fit roles at companies not yet in the command center
+- Query-pack-first only:
+  - recreates the noisy LinkedIn/manual-search problem in a more durable wrapper
+  - makes duplicate prevention and follow-up sequencing harder because source reliability differs by board
+- LinkedIn-only:
+  - fragile because MCP auth/session drift and loose search matching are already known failure modes
+  - violates the system goal of not making LinkedIn scraping the source of truth
+
+### Query Run Record
+
+Each broad discovery run should become a durable record before jobs are accepted into the command center.
+
+Minimum fields:
+
+- source:
+  - `linkedin_mcp`
+  - `official_company_page`
+  - `ats_greenhouse`
+  - `ats_lever`
+  - `ats_ashby`
+  - `manual_browser`
+- query pack:
+  - `FINTECH`
+  - `AI`
+  - role-specific exception pack, such as `ACCESS`, only when justified by a specific posting or target-company exception
+- query text or query pack item
+- sort mode when the source exposes it, such as `relevance` or `date`
+- run status:
+  - `completed`
+  - `partial`
+  - `failed`
+- result count returned by the source
+- candidate count accepted into `jobs`
+- rejected count with concise reasons
+- duplicate count
+- follow-up actions created, such as `screen_role`, `research_company`, or `add_source`
+- raw source reference when useful:
+  - LinkedIn job ID
+  - ATS job ID
+  - normalized canonical URL
+  - saved local import file path
+- run notes for source failures, noisy result patterns, or pack tuning
+
+The query run is not a job application artifact. It is an audit trail for discovery quality and for avoiding repeated broad searches that produce the same weak results.
+
+### Failure And Noise Handling
+
+LinkedIn MCP failure handling:
+
+- A failed `linkedin_mcp` run should be recorded as `failed` or `partial`, with the error class in notes.
+- Failure should not block the whole discovery session.
+- The operator should continue with:
+  - configured ATS `poll` runs for target companies
+  - official company career pages for high-priority targets
+  - manual/browser import for a small set of visible promising roles
+- Do not add jobs from malformed LinkedIn search-result metadata without validating the detail page or canonical company posting.
+
+Noisy broad results:
+
+- Start with narrow problem-domain query packs, not generic title-only searches.
+- Cap each source/pack pass to a reviewable result set before broadening.
+- Reject or down-rank malformed metadata, people-management-heavy titles, stale/thin posts, and roles where the JD shifts away from the query intent.
+- Record rejected/noisy counts on the query run so future pack tuning has evidence.
+- Only jobs that survive detail validation should enter `jobs`; low-signal search results stay in query-run notes, not the main job list.
+
+### Duplicate Interaction
+
+Duplicate detection must run before a discovered result becomes a new `jobs` row.
+
+Layering:
+
+- Imported Notion or legacy pipeline history becomes command-center history first, through an import command that creates companies, jobs, events, and outcomes.
+- New broad-source candidates are compared against imported history and current jobs using the existing duplicate rules:
+  - normalized canonical URL
+  - source plus source job ID
+  - same company, similar normalized title, same location/remote status, active 60-day window
+- Strong duplicates should increment the query run duplicate count and should not create new jobs.
+- Likely duplicates should not create a new job by default; record the existing job ID and only add a new job when the canonical posting is materially different.
+- Reposts can become new jobs only when the prior job is closed or outside the active duplicate window; the new run should still link notes back to the prior job.
+
+### Proposed Command Surface
+
+Smallest next implementation surface:
+
+```bash
+python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --limit 25
+python3 scripts/job_search.py query run --source linkedin_mcp --pack AI --limit 15
+python3 scripts/job_search.py query run --source manual_browser --pack ACCESS --reason "specific access/trust target role"
+python3 scripts/job_search.py query import --source manual_browser --pack FINTECH --path APPLICATIONS/_ops/query-runs/fintech.json
+python3 scripts/job_search.py query list --source linkedin_mcp --pack FINTECH
+python3 scripts/job_search.py query show <query_run_id>
+```
+
+Implementation notes:
+
+- `query run` can start as a record-and-review command; source execution can stay MCP/manual-assisted until a safe adapter boundary exists.
+- `query import` is the fallback for LinkedIn MCP failures and manual/browser runs.
+- Accepted jobs should still be written through existing `job add` semantics or the same internal storage path so duplicate checks and action generation remain centralized.
+- Target-company ATS polling remains `source add` plus `poll`, not a query command.
+- Non-FINTECH/AI variants require an explicit reason on the run; `ACCESS` is not a default v1 broad-search lane.
+
+### Follow-up Implementation Slices
+
+Ready:
+
+- Proposed ticket: Add query run schema and CLI read/write surface.
+  - Acceptance:
+    - SQLite migration adds `query_runs` and `query_run_results` or an equivalent normalized structure.
+    - CLI supports `query import`, `query list`, and `query show`.
+    - Imported result rows record source, pack, query text, result count, accepted/rejected/duplicate counts, and notes.
+    - Duplicate candidates are reported against existing jobs without creating new jobs.
+  - Validation:
+    - `make test`
+    - targeted tests for query import idempotency and duplicate reporting
+
+- Proposed ticket: Add query-pack registry for FINTECH and AI, with exception-pack support.
+  - Acceptance:
+    - Packs are machine-readable from the repo, not only prose.
+    - CLI can list packs and queries.
+    - Exception packs require an explicit reason when used in broad query runs.
+    - ACCESS pack is available for identity, trust, permissions, access, controls, and risk workflow terms, but is not listed as a default v1 broad-search lane.
+  - Validation:
+    - `make test`
+    - targeted parser/registry tests
+
+Needs grooming:
+
+- Proposed ticket: Add LinkedIn MCP query adapter behind the query run interface.
+  - Needs decisions:
+    - how Codex-external MCP calls are invoked from a deterministic CLI
+    - whether raw MCP payloads should be saved locally for replay
+    - how auth/session failures should be classified
+  - Acceptance draft:
+    - failed MCP runs create a failed query-run record
+    - successful runs normalize source job IDs and canonical URLs before duplicate checks
+    - detail validation is required before accepting a candidate into `jobs`
+  - Validation draft:
+    - unit tests with saved MCP-like fixtures
+    - manual smoke run when LinkedIn MCP auth is available
+
 ## Metrics
 
 Track minimal weekly metrics from events:
