@@ -152,11 +152,15 @@ Core commands:
 - `python3 scripts/job_search.py init`
 - `python3 scripts/job_search.py status`
 - `python3 scripts/job_search.py company show "Company"`
+- `python3 scripts/job_search.py company update "Company" --target-roles "Product Manager" --lanes fintech`
+- `python3 scripts/job_search.py source add "Company" --type greenhouse --key <board-token>`
+- `python3 scripts/job_search.py poll --company "Company"`
 - `python3 scripts/job_search.py job list --company "Company"`
 - `python3 scripts/job_search.py action next`
 - `python3 scripts/job_search.py event list --company "Company"`
 
-V1.1 adds ATS-native target-company polling, starting with Greenhouse, Lever, and Ashby. Broad LinkedIn polling remains lower priority because it is noisier and more brittle.
+V1.1 adds explicit, optional ATS-native target-company polling through configured Greenhouse, Lever, and Ashby sources. Broad LinkedIn polling remains lower priority because it is noisier and more brittle.
+Configured `target_roles` drive screen-action creation; jobs outside those role targets are still stored as `ignored_by_filter`.
 
 Cutover note: no legacy `APPLICATIONS/_ops/job_pipeline.jsonl` or `APPLICATIONS/_ops/JOB_PIPELINE.md` files were present in this workspace, so there were no useful records to migrate. The old `scripts/job_pipeline.py` JSONL workflow has been removed.
 

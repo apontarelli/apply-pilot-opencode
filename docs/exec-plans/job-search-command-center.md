@@ -239,9 +239,9 @@ First slice:
 - Source definitions for target companies.
 - No automated polling.
 
-V1.1:
+V1.1 implemented slice:
 
-- Target-company polling first.
+- Target-company polling first through explicit `source` definitions and manual `poll` runs.
 - ATS-native integrations before generic page scraping.
 - Initial ATS priority:
   - Greenhouse
