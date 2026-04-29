@@ -1161,6 +1161,344 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertEqual(generated[1][:3], ("follow_up", "follow_up", "skipped"))
             self.assertIsNotNone(generated[1][3])
 
+    def test_no_interview_rejection_creates_company_cooldown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Coinbase", "--tier", "1")
+            self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Coinbase",
+                "Senior Product Manager",
+                "--lane",
+                "fintech",
+            )
+            self.run_cli(
+                db_path,
+                "job",
+                "status",
+                "1",
+                "applied",
+                "--happened-at",
+                "2026-04-26T12:00:00+00:00",
+            )
+
+            self.run_cli(
+                db_path,
+                "job",
+                "status",
+                "1",
+                "rejected",
+                "--happened-at",
+                "2026-04-27T12:00:00+00:00",
+                "--notes",
+                "No interview rejection",
+            )
+
+            company = self.run_cli(db_path, "company", "show", "Coinbase")
+
+            self.assertIn("Summary: tier=1 | status=cooldown", company.stdout)
+            self.assertIn("Cooldown: 2026-06-11T12:00:00+00:00", company.stdout)
+            self.assertIn("Last outcome: rejection_received", company.stdout)
+
+    def test_interview_loop_rejection_creates_longer_cooldown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Ramp")
+            self.run_cli(db_path, "job", "add", "Ramp", "Product Lead")
+            self.run_cli(
+                db_path,
+                "event",
+                "add",
+                "--company",
+                "Ramp",
+                "--type",
+                "interview",
+                "--job-id",
+                "1",
+                "--happened-at",
+                "2026-04-28T12:00:00+00:00",
+            )
+
+            self.run_cli(
+                db_path,
+                "job",
+                "status",
+                "1",
+                "rejected",
+                "--happened-at",
+                "2026-04-29T12:00:00+00:00",
+            )
+
+            company = self.run_cli(db_path, "company", "show", "Ramp")
+
+            self.assertIn("Cooldown: 2026-08-27T12:00:00+00:00", company.stdout)
+
+    def test_materially_different_lane_can_bypass_company_cooldown(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Mercury")
+            self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Mercury",
+                "Consumer Product Manager",
+                "--lane",
+                "consumer",
+                "--status",
+                "applied",
+            )
+            self.run_cli(
+                db_path,
+                "job",
+                "status",
+                "1",
+                "rejected",
+                "--happened-at",
+                "2026-04-27T12:00:00+00:00",
+                "--notes",
+                "No interview rejection",
+            )
+
+            self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Mercury",
+                "Consumer Product Manager II",
+                "--lane",
+                "consumer",
+                "--status",
+                "ready_to_apply",
+            )
+            blocked_actions = self.run_cli(db_path, "action", "next", "--queue", "apply")
+
+            self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Mercury",
+                "Ledger Product Manager",
+                "--lane",
+                "platform",
+                "--status",
+                "ready_to_apply",
+            )
+            actions = self.run_cli(db_path, "action", "next", "--queue", "apply")
+
+            self.assertIn("no actions", blocked_actions.stdout)
+            self.assertIn("Mercury / Ledger Product Manager", actions.stdout)
+
+    def test_duplicate_detection_reports_strong_and_likely_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Coinbase")
+            self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Coinbase",
+                "Product Manager, Payments",
+                "--source",
+                "greenhouse",
+                "--source-job-id",
+                "abc123",
+                "--url",
+                "https://jobs.example.com/roles/123?gh_src=linkedin#apply",
+                "--location",
+                "New York, NY",
+            )
+
+            url_duplicate = self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Coinbase",
+                "Product Manager, Payments",
+                "--source",
+                "manual",
+                "--url",
+                "https://jobs.example.com/roles/123/",
+                "--location",
+                "New York, NY",
+            )
+            source_duplicate = self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Coinbase",
+                "Product Manager, Payments",
+                "--source",
+                "Greenhouse",
+                "--source-job-id",
+                "abc123",
+                "--location",
+                "New York, NY",
+            )
+            likely_duplicate = self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Coinbase",
+                "Product Manager, Payments",
+                "--location",
+                "New York, NY",
+            )
+
+            self.assertIn("level=strong", url_duplicate.stdout)
+            self.assertIn("reason=normalized_url", url_duplicate.stdout)
+            self.assertIn("level=strong", source_duplicate.stdout)
+            self.assertIn("reason=source_job_id", source_duplicate.stdout)
+            self.assertIn("level=likely", likely_duplicate.stdout)
+            self.assertIn("reason=same_company_title_location_window", likely_duplicate.stdout)
+
+            with closing(self.connect(db_path)) as connection:
+                job_count = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+            self.assertEqual(job_count, 1)
+
+            self.run_cli(db_path, "job", "status", "1", "closed")
+            closed_url_duplicate = self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Coinbase",
+                "Product Manager, Payments",
+                "--url",
+                "https://jobs.example.com/roles/123/",
+            )
+            repost = self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Coinbase",
+                "Product Manager, Payments",
+                "--location",
+                "New York, NY",
+            )
+
+            self.assertIn("reason=normalized_url", closed_url_duplicate.stdout)
+            self.assertIn("job id=2 added", repost.stdout)
+
+    def test_metrics_aggregates_weekly_review_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Stripe")
+            self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Stripe",
+                "Senior Product Manager",
+                "--lane",
+                "fintech",
+                "--fit-score",
+                "85",
+            )
+            self.run_cli(db_path, "action", "done", "1")
+            self.run_cli(db_path, "job", "status", "1", "ready_to_apply")
+            self.run_cli(
+                db_path,
+                "job",
+                "status",
+                "1",
+                "applied",
+                "--happened-at",
+                "2026-04-27T12:00:00+00:00",
+            )
+            self.run_cli(
+                db_path,
+                "event",
+                "add",
+                "--company",
+                "Stripe",
+                "--type",
+                "interview",
+                "--job-id",
+                "1",
+                "--happened-at",
+                "2026-04-28T12:00:00+00:00",
+            )
+            self.run_cli(
+                db_path,
+                "job",
+                "status",
+                "1",
+                "rejected",
+                "--happened-at",
+                "2026-04-29T12:00:00+00:00",
+            )
+            self.run_cli(
+                db_path,
+                "event",
+                "add",
+                "--company",
+                "Stripe",
+                "--type",
+                "message_sent",
+                "--happened-at",
+                "2026-04-26T12:00:00+00:00",
+            )
+            self.run_cli(
+                db_path,
+                "event",
+                "add",
+                "--company",
+                "Stripe",
+                "--type",
+                "coffee_chat",
+                "--happened-at",
+                "2026-04-27T09:00:00+00:00",
+            )
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    connection.execute(
+                        """
+                        UPDATE jobs
+                        SET created_at = ?
+                        WHERE id = 1
+                        """,
+                        ("2026-04-20T12:00:00+00:00",),
+                    )
+                    connection.execute(
+                        """
+                        UPDATE actions
+                        SET completed_at = ?
+                        WHERE queue = 'screen'
+                        """,
+                        ("2026-04-22T12:00:00+00:00",),
+                    )
+
+            metrics = self.run_cli(
+                db_path,
+                "metrics",
+                "--since",
+                "2026-04-20T00:00:00+00:00",
+                "--until",
+                "2026-05-01T00:00:00+00:00",
+            )
+
+            for expected in (
+                "jobs_screened=1",
+                "applications_submitted=1",
+                "applications_by_lane=fintech:1",
+                "ready_to_apply_rate=100.0%",
+                "interview_rate=100.0%",
+                "rejection_rate=100.0%",
+                "outreach_response_rate=100.0%",
+                "companies_touched=1",
+                "actions_completed=1",
+                "average_days_from_discovery_to_application=7.0",
+            ):
+                self.assertIn(expected, metrics.stdout)
+
     def test_done_message_action_generates_single_follow_up(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "job_search.sqlite"
