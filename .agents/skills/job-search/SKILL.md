@@ -42,6 +42,13 @@ Before searching listings or recommending a role, check the command center for:
 - existing jobs for the company, especially duplicate titles or recent attempts
 - action history that already makes the next step clear
 
+For target-company work, use the same command center rather than a separate list:
+- `python3 scripts/job_search.py company list`
+- `python3 scripts/job_search.py company update "Company" --tier 1 --lanes "FINTECH" ...`
+- `python3 scripts/job_search.py contact list --company "Company"`
+- `python3 scripts/job_search.py action add --company "Company" --queue research --kind vet_company --notes "..."`
+- `python3 scripts/job_search.py action add --company "Company" --queue research --kind find_contact --notes "..."`
+
 ## Lane Priority
 
 Default search motion:
@@ -277,6 +284,51 @@ Use:
 - `ready_to_apply` when the role should be handed off to Antonio
 - `applied` when Antonio confirms submission
 - `rejected`, `closed`, or `archived` when the outcome is known
+
+## Target Company Research
+
+Use this flow when the user wants to add companies to the target list or vet whether the current list is strong enough.
+
+1. Start from command-center reality:
+   - `status`
+   - `company list`
+   - `job list`
+   - `contact list`
+   - `action next --queue research`
+2. Classify existing companies before adding many new ones:
+   - `tier 1`: strongest strategic targets; worth contact research, role polling, or targeted proof
+   - `tier 2`: good targets; monitor roles and apply when fit is clean
+   - `tier 3`: opportunistic; keep only if a specific role justifies attention
+   - `watch`: plausible company but no immediate role or contact motion
+   - `archived`: weak fit, stale, or not worth future search time
+3. Evaluate target companies on:
+   - lane fit: `FINTECH`, `ACCESS`, `AI`, `MEDIA_PLATFORM`, or `PASS`
+   - problem fit: payroll, accounting, reporting, controls, identity/access, internal ops, AI workflow, operator systems
+   - interest: high / medium / low
+   - comp likelihood: strong / unclear / weak
+   - role-market signal: likely PM openings at truthful seniority
+   - contact path: warm path, recruiter path, hiring-manager path, or none yet
+   - research gap: what must be known before applying or investing more time
+4. Record the decision:
+   - update company `tier`, `lanes`, `why_interesting`, `fit_thesis`, `known_gaps`, `target_roles`, and `notes`
+   - add contacts only when you have a real person and source link
+   - add `research:vet_company`, `research:find_contact`, or `artifact:artifact_idea` actions when there is a concrete next step
+   - add a gap when the blocker is reusable or material, not just ordinary uncertainty
+5. Do not let target-company research block the apply queue:
+   - active `ready_to_apply` roles stay first unless the user explicitly prioritizes company research
+   - add new companies in small batches, then queue research actions instead of trying to finish every company in one pass
+
+Default target-company expansion batch:
+- 5-8 fintech/platform companies
+- 2-4 access/trust workflow companies
+- 2-4 AI workflow companies
+- avoid generic B2B SaaS lists unless the company maps to the current proof
+
+Target-company handoff format:
+- `Add now`: company, tier, lane, why, target roles, next action
+- `Watch`: company, lane, condition that would make it active
+- `Skip`: company, reason
+- `Queue`: exact `action add` commands or confirmed command-center actions
 
 Common writes:
 - `python3 scripts/job_search.py company add "Company" ...`

@@ -128,3 +128,63 @@ Red flags:
 - ML infra or research first
 - title/company metadata is malformed
 - domain moat depends on experience Antonio cannot claim truthfully
+
+## Target Company Packs
+
+Use these when expanding the company list. Treat them as starting points to vet, not automatic adds.
+
+### Fintech / Platform Targets
+
+High-priority archetypes:
+- payroll and workforce payments
+- accounting, close, ERP, reporting, and reconciliation
+- spend management and financial operations
+- banking, cards, ledgers, and money movement where the work is platform/workflow-heavy
+
+Seed companies to vet:
+- Ramp
+- Brex
+- Gusto
+- Rippling
+- Deel
+- Modern Treasury
+- Plaid
+- Check
+- Rutter
+- Middesk
+- Airbase
+- Navan
+
+### Access / Trust Workflow Targets
+
+High-priority archetypes:
+- identity, access, verification, onboarding/offboarding, compliance operations, auditability
+
+Seed companies to vet:
+- Okta
+- Persona
+- Alloy
+- Sardine
+- WorkOS
+- Merge
+- Drata
+- Secureframe
+
+### AI Workflow Targets
+
+High-priority archetypes:
+- enterprise AI workflow, operator tools, evals, guardrails, support/compliance/finance-ops automation
+
+Seed companies to vet:
+- Harvey
+- Hebbia
+- Writer
+- Glean
+- Sierra
+- Intercom
+- Decagon
+- Retool
+
+Skip or down-rank when:
+- the likely PM work is consumer growth, sales-led dashboards only, people-management first, or ML infra/research first
+- the company is interesting but does not have a truthful near-term role path

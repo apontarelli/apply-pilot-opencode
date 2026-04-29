@@ -3189,6 +3189,32 @@ def command_action_next(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_action_add(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    now = utc_now()
+    with closing(connect(db_path)) as connection:
+        with connection:
+            company_id = resolve_company_id(connection, args.company)
+            action_id, created = upsert_action(
+                connection,
+                company_id=company_id,
+                job_id=args.job_id,
+                contact_id=args.contact_id,
+                artifact_id=args.artifact_id,
+                gap_id=args.gap_id,
+                queue=args.queue,
+                kind=args.kind,
+                due_at=args.due_at,
+                notes=args.notes,
+                now=now,
+            )
+            touch_company(connection, company_id, now)
+    state = "added" if created else "existing"
+    print(f"action {state} id={action_id}")
+    return 0
+
+
 def command_action_list(args: argparse.Namespace) -> int:
     db_path = Path(args.db_path)
     require_database(db_path)
@@ -3515,6 +3541,20 @@ def parse_args() -> argparse.Namespace:
     action_subparsers = action.add_subparsers(
         dest="action_command", metavar="command", required=True
     )
+    action_add = action_subparsers.add_parser("add", help="Add a manual action.")
+    action_add.add_argument("--company", required=True)
+    action_add.add_argument(
+        "--queue",
+        choices=("screen", "apply", "follow_up", "research", "artifact", "classify"),
+        required=True,
+    )
+    action_add.add_argument("--kind", required=True)
+    action_add.add_argument("--job-id", type=int)
+    action_add.add_argument("--contact-id", type=int)
+    action_add.add_argument("--artifact-id", type=int)
+    action_add.add_argument("--gap-id", type=int)
+    action_add.add_argument("--due-at")
+    action_add.add_argument("--notes")
     action_next = action_subparsers.add_parser("next", help="Show next queued actions.")
     action_next.add_argument(
         "--queue",
@@ -3710,6 +3750,8 @@ def main() -> int:
             if args.event_command == "list":
                 return command_event_list(args)
         if args.command == "action":
+            if args.action_command == "add":
+                return command_action_add(args)
             if args.action_command == "next":
                 return command_action_next(args)
             if args.action_command == "list":

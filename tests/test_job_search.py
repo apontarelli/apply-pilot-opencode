@@ -1330,6 +1330,54 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 ],
             )
 
+    def test_manual_action_add_queues_company_research_idempotently(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Ramp", "--tier", "2")
+
+            first = self.run_cli(
+                db_path,
+                "action",
+                "add",
+                "--company",
+                "Ramp",
+                "--queue",
+                "research",
+                "--kind",
+                "vet_company",
+                "--due-at",
+                "2026-04-30T16:00:00+00:00",
+                "--notes",
+                "Decide if Ramp belongs in the active target list.",
+            )
+            second = self.run_cli(
+                db_path,
+                "action",
+                "add",
+                "--company",
+                "Ramp",
+                "--queue",
+                "research",
+                "--kind",
+                "vet_company",
+                "--due-at",
+                "2026-04-30T16:00:00+00:00",
+                "--notes",
+                "Decide if Ramp belongs in the active target list.",
+            )
+            next_research = self.run_cli(
+                db_path, "action", "next", "--queue", "research", "--limit", "5"
+            )
+
+            self.assertIn("action added id=1", first.stdout)
+            self.assertIn("action existing id=1", second.stdout)
+            self.assertIn(
+                "#1 | research:vet_company | queued | "
+                "due=2026-04-30T16:00:00+00:00 | Ramp",
+                next_research.stdout,
+            )
+
     def test_job_state_changes_generate_follow_up_and_classify_actions(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "job_search.sqlite"
