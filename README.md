@@ -155,6 +155,9 @@ Core commands:
 - `python3 scripts/job_search.py company update "Company" --target-roles "Product Manager" --lanes fintech`
 - `python3 scripts/job_search.py source add "Company" --type greenhouse --key <board-token>`
 - `python3 scripts/job_search.py poll --company "Company"`
+- `python3 scripts/job_search.py query import --file APPLICATIONS/_ops/query-runs/fintech.json`
+- `python3 scripts/job_search.py query list`
+- `python3 scripts/job_search.py query show <query_run_id>`
 - `python3 scripts/job_search.py job list --company "Company"`
 - `python3 scripts/job_search.py action next`
 - `python3 scripts/job_search.py event list --company "Company"`

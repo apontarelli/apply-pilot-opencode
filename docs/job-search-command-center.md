@@ -17,6 +17,8 @@ The command center tracks:
 
 - `companies`
 - `company_sources`
+- `query_runs`
+- `query_run_results`
 - `jobs`
 - `contacts`
 - `artifacts`
@@ -35,6 +37,10 @@ python3 scripts/job_search.py company list
 python3 scripts/job_search.py source add "Company" --type greenhouse --key <board-token>
 python3 scripts/job_search.py source list --company "Company"
 python3 scripts/job_search.py poll --company "Company"
+python3 scripts/job_search.py query import --file APPLICATIONS/_ops/query-runs/fintech.json
+python3 scripts/job_search.py query import --source manual_browser --pack FINTECH --query "senior product manager payroll" --result-count 12 --raw-source-reference manual-2026-04-29
+python3 scripts/job_search.py query list
+python3 scripts/job_search.py query show <query_run_id>
 python3 scripts/job_search.py job add --company "Company" --title "Senior Product Manager" --source manual
 python3 scripts/job_search.py job list --company "Company"
 python3 scripts/job_search.py action next --queue apply --limit 5
@@ -139,6 +145,10 @@ Minimum fields:
 - notes for source failures, noisy result patterns, or pack tuning
 
 The query run is not an application artifact. It is an audit trail for discovery quality and for avoiding repeated broad searches that produce the same weak results.
+
+Saved import JSON supports run metadata plus a `results` array. Result objects may include `company`, `title`, `url`, `source_job_id`, `location`, `remote_status`, `compensation_signal`, `status` / `decision`, `notes`, and raw source references.
+
+Accepted jobs should still be written through existing `job add` semantics after review so duplicate checks and action generation remain centralized.
 
 ## Failure And Noise Handling
 

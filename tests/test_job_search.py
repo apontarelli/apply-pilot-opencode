@@ -213,9 +213,9 @@ class JobSearchDatabaseTests(unittest.TestCase):
             second = self.run_cli(db_path, "init")
             status = self.run_cli(db_path, "status")
 
-            self.assertIn("schema_version=3", first.stdout)
-            self.assertIn("schema_version=3", second.stdout)
-            self.assertIn("schema_version=3", status.stdout)
+            self.assertIn("schema_version=4", first.stdout)
+            self.assertIn("schema_version=4", second.stdout)
+            self.assertIn("schema_version=4", status.stdout)
             self.assertIn("companies=0", status.stdout)
             self.assertIn("jobs=0", status.stdout)
             self.assertIn("actions=0", status.stdout)
@@ -224,7 +224,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 migration_count = connection.execute(
                     "SELECT COUNT(*) FROM schema_migrations"
                 ).fetchone()[0]
-                self.assertEqual(migration_count, 3)
+                self.assertEqual(migration_count, 4)
             self.assertEqual(db_path.stat().st_mode & 0o777, 0o600)
 
     def test_init_migrates_duplicate_open_actions_before_dedupe_index(self) -> None:
@@ -256,11 +256,36 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 with self.assertRaises(sqlite3.IntegrityError):
                     self.insert_action(connection, company_id)
 
-            self.assertIn("schema_version=3", migrated.stdout)
-            self.assertEqual([row[0] for row in versions], [1, 2, 3])
+            self.assertIn("schema_version=4", migrated.stdout)
+            self.assertEqual([row[0] for row in versions], [1, 2, 3, 4])
             self.assertEqual(actions[0][0], "queued")
             self.assertEqual(actions[1][0], "skipped")
             self.assertIn("schema v2 migration", actions[1][1])
+
+    def test_init_migrates_existing_database_to_query_run_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    connection.execute("DROP TABLE query_run_results")
+                    connection.execute("DROP TABLE query_runs")
+                    connection.execute("DELETE FROM schema_migrations WHERE version = 4")
+
+            migrated = self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                version = connection.execute(
+                    "SELECT MAX(version) FROM schema_migrations"
+                ).fetchone()[0]
+                query_run_count = connection.execute(
+                    "SELECT COUNT(*) FROM query_runs"
+                ).fetchone()[0]
+
+            self.assertIn("schema_version=4", migrated.stdout)
+            self.assertEqual(version, 4)
+            self.assertEqual(query_run_count, 0)
 
     def test_status_reports_uninitialized_database_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -275,6 +300,246 @@ class JobSearchDatabaseTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 1)
             self.assertIn("Database not initialized:", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_query_import_file_is_idempotent_and_reports_job_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Stripe")
+            self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Stripe",
+                "Senior Product Manager",
+                "--url",
+                "https://jobs.example.com/stripe/123?utm=ignored",
+                "--source",
+                "linkedin",
+                "--source-job-id",
+                "123",
+            )
+            payload_path = Path(tmpdir) / "query-run.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "source": "linkedin",
+                        "pack": "fintech-core",
+                        "query": "senior product manager payroll",
+                        "sort_mode": "relevance",
+                        "status": "completed",
+                        "raw_source_reference": "linkedin-search-abc",
+                        "results": [
+                            {
+                                "company": "Stripe",
+                                "title": "Senior Product Manager",
+                                "url": "https://jobs.example.com/stripe/123",
+                                "source_job_id": "123",
+                                "status": "accepted",
+                            },
+                            {
+                                "company": "Mercury",
+                                "title": "Product Manager, Banking Platform",
+                                "url": "https://jobs.example.com/mercury/456",
+                                "status": "accepted",
+                            },
+                            {
+                                "company": "SlowCo",
+                                "title": "Growth Product Manager",
+                                "status": "rejected",
+                                "notes": "consumer growth role",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            first = self.run_cli(db_path, "query", "import", "--file", str(payload_path))
+            second = self.run_cli(db_path, "query", "import", "--file", str(payload_path))
+            query_run_id = self.stdout_id(first)
+            listed = self.run_cli(db_path, "query", "list")
+            shown = self.run_cli(db_path, "query", "show", str(query_run_id))
+
+            with closing(self.connect(db_path)) as connection:
+                job_count = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+                run_count = connection.execute("SELECT COUNT(*) FROM query_runs").fetchone()[0]
+                result_rows = connection.execute(
+                    """
+                    SELECT result_status, duplicate_job_id
+                    FROM query_run_results
+                    ORDER BY ordinal
+                    """
+                ).fetchall()
+
+            self.assertIn(f"query run created id={query_run_id}", first.stdout)
+            self.assertIn(f"query run updated id={query_run_id}", second.stdout)
+            self.assertIn("results=3 accepted=1 rejected=1 duplicates=1", first.stdout)
+            self.assertIn("source=linkedin", listed.stdout)
+            self.assertIn("pack=fintech-core", listed.stdout)
+            self.assertIn("status=completed", listed.stdout)
+            self.assertIn("results=3", listed.stdout)
+            self.assertIn("accepted=1", listed.stdout)
+            self.assertIn("rejected=1", listed.stdout)
+            self.assertIn("duplicates=1", listed.stdout)
+            self.assertIn("Query run:", shown.stdout)
+            self.assertIn("duplicate_job=#1", shown.stdout)
+            self.assertIn("reason=normalized_url", shown.stdout)
+            self.assertEqual(job_count, 1)
+            self.assertEqual(run_count, 1)
+            self.assertEqual(
+                result_rows,
+                [("duplicate", 1), ("accepted", None), ("rejected", None)],
+            )
+
+    def test_query_import_counts_persisted_rows_after_result_key_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            payload_path = Path(tmpdir) / "query-run.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "source": "linkedin",
+                        "pack": "ai-core",
+                        "query": "ai workflow product manager",
+                        "results": [
+                            {
+                                "company": "OpenAI",
+                                "title": "Product Manager, Workflows",
+                                "url": "https://jobs.example.com/openai/pm-workflows?utm=one",
+                                "status": "accepted",
+                            },
+                            {
+                                "company": "OpenAI",
+                                "title": "Product Manager, Workflows",
+                                "url": "https://jobs.example.com/openai/pm-workflows#saved",
+                                "status": "rejected",
+                                "notes": "same listing saved twice",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = self.run_cli(db_path, "query", "import", "--file", str(payload_path))
+            query_run_id = self.stdout_id(result)
+
+            with closing(self.connect(db_path)) as connection:
+                run = connection.execute(
+                    """
+                    SELECT result_count, accepted_count, rejected_count, duplicate_count
+                    FROM query_runs
+                    WHERE id = ?
+                    """,
+                    (query_run_id,),
+                ).fetchone()
+                result_rows = connection.execute(
+                    """
+                    SELECT result_status, notes
+                    FROM query_run_results
+                    WHERE query_run_id = ?
+                    """,
+                    (query_run_id,),
+                ).fetchall()
+
+            self.assertIn("results=1 accepted=0 rejected=1 duplicates=0", result.stdout)
+            self.assertEqual(tuple(run), (1, 0, 1, 0))
+            self.assertEqual(result_rows, [("rejected", "same listing saved twice")])
+
+    def test_query_import_accepts_explicit_fields_and_result_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            result = self.run_cli(
+                db_path,
+                "query",
+                "import",
+                "--source",
+                "manual-board",
+                "--pack",
+                "ai-core",
+                "--query",
+                "ai workflow product manager",
+                "--sort-mode",
+                "date",
+                "--raw-source-reference",
+                "manual-2026-04-29",
+                "--result-json",
+                json.dumps(
+                    {
+                        "company": "OpenAI",
+                        "title": "Product Manager, Workflows",
+                        "url": "https://jobs.example.com/openai/pm-workflows",
+                        "decision": "accepted",
+                    }
+                ),
+            )
+            query_run_id = self.stdout_id(result)
+            shown = self.run_cli(db_path, "query", "show", str(query_run_id))
+
+            self.assertIn("query run created", result.stdout)
+            self.assertIn("results=1 accepted=1 rejected=0 duplicates=0", result.stdout)
+            self.assertIn("source=manual-board", shown.stdout)
+            self.assertIn("pack=ai-core", shown.stdout)
+            self.assertIn("sort=date", shown.stdout)
+            self.assertIn("OpenAI | Product Manager, Workflows", shown.stdout)
+
+    def test_query_import_records_manual_run_without_result_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            result = self.run_cli(
+                db_path,
+                "query",
+                "import",
+                "--source",
+                "linkedin_mcp",
+                "--pack",
+                "fintech-core",
+                "--query",
+                "product manager accounting",
+                "--status",
+                "partial",
+                "--result-count",
+                "12",
+                "--notes",
+                "saved summary only",
+            )
+            query_run_id = self.stdout_id(result)
+            shown = self.run_cli(db_path, "query", "show", str(query_run_id))
+
+            self.assertIn("results=12 accepted=0 rejected=0 duplicates=0", result.stdout)
+            self.assertIn("Counts: results=12 accepted=0 rejected=0 duplicates=0", shown.stdout)
+            self.assertIn("- none", shown.stdout)
+
+    def test_query_list_rejects_non_positive_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "query",
+                    "list",
+                    "--limit",
+                    "0",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("query list --limit must be a positive integer", result.stderr)
             self.assertNotIn("Traceback", result.stderr)
 
     def test_import_pipeline_preserves_legacy_roles_and_is_idempotent(self) -> None:
