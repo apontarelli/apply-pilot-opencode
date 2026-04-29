@@ -20,10 +20,19 @@ from urllib.request import Request, urlopen
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = REPO_ROOT / "APPLICATIONS" / "_ops" / "job_search.sqlite"
 DEFAULT_PIPELINE_PATH = REPO_ROOT / "APPLICATIONS" / "_ops" / "job_pipeline.jsonl"
+QUERY_PACK_REGISTRY_PATH = REPO_ROOT / "config" / "job_search_query_packs.json"
 SCHEMA_VERSION = 3
 OPEN_ACTION_STATUSES = ("queued", "in_progress", "blocked", "rescheduled")
 TERMINAL_ACTION_STATUSES = ("done", "skipped")
 ATS_TYPES = ("greenhouse", "lever", "ashby")
+QUERY_SOURCES = (
+    "linkedin_mcp",
+    "official_company_page",
+    "ats_greenhouse",
+    "ats_lever",
+    "ats_ashby",
+    "manual_browser",
+)
 SOURCE_STATUSES = ("active", "paused", "archived")
 POLL_SCREEN_FIT_SCORE = 75
 POLL_IGNORED_FIT_SCORE = 35
@@ -98,6 +107,19 @@ class DiscoveredJob:
 class PollStoreResult:
     status: str
     job_id: int | None = None
+
+
+@dataclass(frozen=True)
+class QueryPack:
+    name: str
+    label: str
+    default_repeatable: bool
+    description: str
+    queries: tuple[str, ...]
+
+    @property
+    def pack_type(self) -> str:
+        return "default" if self.default_repeatable else "exception"
 
 
 SCHEMA = """
@@ -603,6 +625,13 @@ def parse_optional_utc(value: str | None) -> datetime | None:
     return parsed
 
 
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return parsed
+
+
 def is_materially_different_role(candidate: sqlite3.Row, prior: sqlite3.Row) -> bool:
     if candidate["lane"] and prior["lane"] and candidate["lane"] != prior["lane"]:
         return True
@@ -613,6 +642,104 @@ def is_materially_different_role(candidate: sqlite3.Row, prior: sqlite3.Row) -> 
         return True
 
     return False
+
+
+def load_query_pack_registry(
+    path: Path = QUERY_PACK_REGISTRY_PATH,
+) -> dict[str, QueryPack]:
+    if not path.exists():
+        raise FileNotFoundError(f"Query pack registry not found: {path}")
+
+    try:
+        raw_registry = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(
+            f"Invalid query pack registry JSON at {path}: {error.msg}"
+        ) from error
+
+    if not isinstance(raw_registry, dict):
+        raise ValueError("Query pack registry must be a JSON object")
+    raw_packs = raw_registry.get("packs")
+    if not isinstance(raw_packs, list) or not raw_packs:
+        raise ValueError("Query pack registry must include a non-empty packs list")
+
+    packs: dict[str, QueryPack] = {}
+    for index, raw_pack in enumerate(raw_packs, start=1):
+        if not isinstance(raw_pack, dict):
+            raise ValueError(f"Query pack #{index} must be an object")
+
+        name = str(raw_pack.get("name") or "").strip().upper()
+        label = str(raw_pack.get("label") or "").strip()
+        description = str(raw_pack.get("description") or "").strip()
+        default_repeatable = raw_pack.get("default_repeatable")
+        raw_queries = raw_pack.get("queries")
+
+        if not name:
+            raise ValueError(f"Query pack #{index} is missing name")
+        if name in packs:
+            raise ValueError(f"Duplicate query pack: {name}")
+        if not label:
+            raise ValueError(f"Query pack {name} is missing label")
+        if not isinstance(default_repeatable, bool):
+            raise ValueError(
+                f"Query pack {name} default_repeatable must be true or false"
+            )
+        if not description:
+            raise ValueError(f"Query pack {name} is missing description")
+        if not isinstance(raw_queries, list) or not raw_queries:
+            raise ValueError(f"Query pack {name} must include non-empty queries")
+
+        queries = tuple(str(query).strip() for query in raw_queries)
+        if any(not query for query in queries):
+            raise ValueError(f"Query pack {name} includes a blank query")
+
+        packs[name] = QueryPack(
+            name=name,
+            label=label,
+            default_repeatable=default_repeatable,
+            description=description,
+            queries=queries,
+        )
+
+    default_names = {pack.name for pack in packs.values() if pack.default_repeatable}
+    if default_names != {"AI", "FINTECH"}:
+        raise ValueError(
+            "Default repeatable query packs must be exactly AI and FINTECH"
+        )
+
+    return packs
+
+
+def get_query_pack(name: str) -> QueryPack:
+    normalized = name.strip().upper()
+    packs = load_query_pack_registry()
+    pack = packs.get(normalized)
+    if pack is None:
+        available = ", ".join(sorted(packs))
+        raise ValueError(
+            f"Unknown query pack: {name}. Available packs: {available}"
+        )
+    return pack
+
+
+def format_query_pack_summary(pack: QueryPack) -> str:
+    reason_label = "requires_reason" if not pack.default_repeatable else "repeatable"
+    return (
+        f"{pack.name}\t{pack.pack_type}\t{reason_label}\t"
+        f"queries={len(pack.queries)}\t{pack.label}"
+    )
+
+
+def validate_query_pack_run(pack: QueryPack, reason: str | None) -> str | None:
+    normalized_reason = (reason or "").strip()
+    if pack.default_repeatable:
+        return normalized_reason or None
+    if not normalized_reason:
+        raise ValueError(
+            f"Query pack {pack.name} is an exception pack. Broad query runs with "
+            f"non-FINTECH/AI packs require --reason."
+        )
+    return normalized_reason
 
 
 def latest_rejected_job(
@@ -3300,6 +3427,50 @@ def command_action_reschedule(args: argparse.Namespace) -> int:
     return command_action_transition(args, "rescheduled")
 
 
+def command_query_packs_list(args: argparse.Namespace) -> int:
+    packs = load_query_pack_registry()
+    selected_packs = list(packs.values())
+    if args.default_only:
+        selected_packs = [pack for pack in selected_packs if pack.default_repeatable]
+
+    for pack in selected_packs:
+        print(format_query_pack_summary(pack))
+    return 0
+
+
+def command_query_packs_show(args: argparse.Namespace) -> int:
+    pack = get_query_pack(args.pack)
+    print(f"name={pack.name}")
+    print(f"label={pack.label}")
+    print(f"type={pack.pack_type}")
+    print(f"default_repeatable={str(pack.default_repeatable).lower()}")
+    print(f"description={pack.description}")
+    print("queries:")
+    for index, query in enumerate(pack.queries, start=1):
+        print(f"{index}. {query}")
+    return 0
+
+
+def command_query_run(args: argparse.Namespace) -> int:
+    pack = get_query_pack(args.pack)
+    reason = validate_query_pack_run(pack, args.reason)
+
+    parts = [
+        "query run prepared",
+        f"source={args.source}",
+        f"pack={pack.name}",
+        f"type={pack.pack_type}",
+        f"limit={args.limit}",
+    ]
+    if reason:
+        parts.append(f"reason={reason}")
+    print(" ".join(parts))
+    print("queries:")
+    for query in pack.queries:
+        print(f"- {query}")
+    return 0
+
+
 def add_stub_group(
     subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
     name: str,
@@ -3436,6 +3607,40 @@ def parse_args() -> argparse.Namespace:
     poll = subparsers.add_parser("poll", help="Poll configured active ATS sources.")
     poll.add_argument("--company")
     poll.add_argument("--source-id", type=int)
+
+    query = subparsers.add_parser("query", help="Manage broad query packs.")
+    query_subparsers = query.add_subparsers(
+        dest="query_command", metavar="command", required=True
+    )
+    query_packs = query_subparsers.add_parser(
+        "packs", help="List and inspect query packs."
+    )
+    query_packs_subparsers = query_packs.add_subparsers(
+        dest="query_packs_command", metavar="command", required=True
+    )
+    query_packs_list = query_packs_subparsers.add_parser(
+        "list", help="List query packs."
+    )
+    query_packs_list.add_argument(
+        "--default-only",
+        action="store_true",
+        help="Show only default repeatable discovery packs.",
+    )
+    query_packs_show = query_packs_subparsers.add_parser(
+        "show", help="Show queries for a query pack."
+    )
+    query_packs_show.add_argument("pack")
+    query_run = query_subparsers.add_parser(
+        "run",
+        help="Validate a broad query run before using a source adapter.",
+    )
+    query_run.add_argument("--source", choices=QUERY_SOURCES, required=True)
+    query_run.add_argument("--pack", required=True)
+    query_run.add_argument("--limit", type=positive_int, default=25)
+    query_run.add_argument(
+        "--reason",
+        help="Required for exception packs such as ACCESS.",
+    )
 
     job = subparsers.add_parser("job", help="Manage company roles.")
     job_subparsers = job.add_subparsers(dest="job_command", metavar="command", required=True)
@@ -3714,6 +3919,14 @@ def main() -> int:
                 return command_source_list(args)
         if args.command == "poll":
             return command_poll(args)
+        if args.command == "query":
+            if args.query_command == "packs":
+                if args.query_packs_command == "list":
+                    return command_query_packs_list(args)
+                if args.query_packs_command == "show":
+                    return command_query_packs_show(args)
+            if args.query_command == "run":
+                return command_query_run(args)
         if args.command == "job":
             if args.job_command == "add":
                 return command_job_add(args)

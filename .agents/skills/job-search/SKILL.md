@@ -29,6 +29,14 @@ Read base resumes only when lane fit is unclear:
 
 Read `references/query-packs.md` before running multi-query discovery.
 
+Use the registry-backed CLI before broad discovery:
+- `python3 scripts/job_search.py query packs list --default-only`
+- `python3 scripts/job_search.py query packs show FINTECH`
+- `python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --limit 25`
+- `python3 scripts/job_search.py query run --source manual_browser --pack ACCESS --reason "specific access/trust target role"`
+
+Exception packs such as `ACCESS`, `PAYMENTS_INSURANCE_CRYPTO_TRUST`, and `INDUSTRIAL_AUTONOMY_BRIDGE` require `--reason` on broad query runs. Do not treat them as default lanes.
+
 Use `scripts/job_search.py` as the cross-session command center:
 - `python3 scripts/job_search.py init` if `status` says the database is not initialized
 - `python3 scripts/job_search.py status`

@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "packs": [
+    {
+      "name": "FINTECH",
+      "label": "Fintech / Platform",
+      "default_repeatable": true,
+      "description": "Primary repeatable discovery lane for payroll, accounting, reporting, controls, identity, reconciliation, and high-trust platform workflows.",
+      "queries": [
+        "senior product manager payroll",
+        "senior product manager accounting platform",
+        "senior product manager reporting platform",
+        "senior product manager financial systems",
+        "senior product manager identity access",
+        "product manager reconciliation"
+      ]
+    },
+    {
+      "name": "AI",
+      "label": "AI / Workflow",
+      "default_repeatable": true,
+      "description": "Selective repeatable discovery lane for enterprise AI workflow, orchestration, operator tooling, evals, guardrails, and reliable structured-output systems.",
+      "queries": [
+        "senior product manager ai workflow",
+        "senior product manager ai automation",
+        "senior product manager agents",
+        "senior product manager internal tools ai",
+        "product manager orchestration",
+        "product manager operator tools ai"
+      ]
+    },
+    {
+      "name": "ACCESS",
+      "label": "Access / Trust Workflow",
+      "default_repeatable": false,
+      "description": "Exception pack for identity, permissions, access management, controls, compliance operations, and trust workflow roles when a specific posting or target-company reason exists.",
+      "queries": [
+        "senior product manager identity access",
+        "senior product manager access management",
+        "senior product manager trust workflow",
+        "senior product manager compliance operations",
+        "product manager access reviews",
+        "product manager permissions platform"
+      ]
+    },
+    {
+      "name": "PAYMENTS_INSURANCE_CRYPTO_TRUST",
+      "label": "Payments / Insurance / Crypto Trust",
+      "default_repeatable": false,
+      "description": "Exception pack for payments operations, insurance workflows, crypto trust, financial controls, ledgers, and reconciliation when a specific role or target-company reason exists.",
+      "queries": [
+        "senior product manager payments operations",
+        "senior product manager financial controls",
+        "senior product manager claims workflow",
+        "senior product manager insurance operations",
+        "senior product manager ledger platform",
+        "senior product manager reconciliation platform"
+      ]
+    },
+    {
+      "name": "INDUSTRIAL_AUTONOMY_BRIDGE",
+      "label": "Industrial / Autonomy Bridge",
+      "default_repeatable": false,
+      "description": "Exception pack for exploratory industrial, autonomy-adjacent, operator workflow, coordination, reliability, or control-software searches when explicitly requested.",
+      "queries": [
+        "senior product manager operator workflow automation",
+        "senior product manager industrial software",
+        "product manager fleet operations software"
+      ]
+    }
+  ]
+}

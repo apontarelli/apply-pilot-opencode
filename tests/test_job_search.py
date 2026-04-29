@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import sqlite3
@@ -14,6 +15,13 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CLI = REPO_ROOT / "scripts" / "job_search.py"
 NOW = "2026-04-27T00:00:00+00:00"
+
+JOB_SEARCH_SPEC = importlib.util.spec_from_file_location("job_search_cli", CLI)
+assert JOB_SEARCH_SPEC is not None
+assert JOB_SEARCH_SPEC.loader is not None
+JOB_SEARCH = importlib.util.module_from_spec(JOB_SEARCH_SPEC)
+sys.modules[JOB_SEARCH_SPEC.name] = JOB_SEARCH
+JOB_SEARCH_SPEC.loader.exec_module(JOB_SEARCH)
 
 
 class JobSearchDatabaseTests(unittest.TestCase):
@@ -276,6 +284,175 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertIn("Database not initialized:", result.stderr)
             self.assertNotIn("Traceback", result.stderr)
+
+    def test_query_packs_default_list_excludes_exception_packs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+
+            result = self.run_cli(db_path, "query", "packs", "list", "--default-only")
+
+            self.assertEqual(
+                result.stdout.splitlines(),
+                [
+                    "FINTECH\tdefault\trepeatable\tqueries=6\tFintech / Platform",
+                    "AI\tdefault\trepeatable\tqueries=6\tAI / Workflow",
+                ],
+            )
+            self.assertNotIn("ACCESS", result.stdout)
+
+    def test_query_pack_registry_rejects_non_default_lane_as_repeatable(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir) / "query_packs.json"
+            registry_path.write_text(
+                json.dumps(
+                    {
+                        "packs": [
+                            {
+                                "name": "FINTECH",
+                                "label": "Fintech / Platform",
+                                "default_repeatable": True,
+                                "description": "Default lane.",
+                                "queries": ["senior product manager payroll"],
+                            },
+                            {
+                                "name": "AI",
+                                "label": "AI / Workflow",
+                                "default_repeatable": True,
+                                "description": "Default lane.",
+                                "queries": ["senior product manager ai workflow"],
+                            },
+                            {
+                                "name": "ACCESS",
+                                "label": "Access / Trust Workflow",
+                                "default_repeatable": True,
+                                "description": "Exception lane.",
+                                "queries": ["product manager access reviews"],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "Default repeatable query packs must be exactly AI and FINTECH",
+            ):
+                JOB_SEARCH.load_query_pack_registry(registry_path)
+
+    def test_query_pack_registry_rejects_blank_queries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            registry_path = Path(tmpdir) / "query_packs.json"
+            registry_path.write_text(
+                json.dumps(
+                    {
+                        "packs": [
+                            {
+                                "name": "FINTECH",
+                                "label": "Fintech / Platform",
+                                "default_repeatable": True,
+                                "description": "Default lane.",
+                                "queries": ["senior product manager payroll"],
+                            },
+                            {
+                                "name": "AI",
+                                "label": "AI / Workflow",
+                                "default_repeatable": True,
+                                "description": "Default lane.",
+                                "queries": [""],
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "Query pack AI includes a blank query",
+            ):
+                JOB_SEARCH.load_query_pack_registry(registry_path)
+
+    def test_query_pack_show_reads_exception_pack_queries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+
+            result = self.run_cli(db_path, "query", "packs", "show", "ACCESS")
+
+            self.assertIn("name=ACCESS", result.stdout)
+            self.assertIn("type=exception", result.stdout)
+            self.assertIn("default_repeatable=false", result.stdout)
+            self.assertIn("product manager access reviews", result.stdout)
+
+    def test_query_run_rejects_exception_pack_without_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "query",
+                    "run",
+                    "--source",
+                    "manual_browser",
+                    "--pack",
+                    "ACCESS",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("Query pack ACCESS is an exception pack", result.stderr)
+            self.assertIn("require --reason", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_query_run_allows_default_pack_without_reason_and_exception_with_reason(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+
+            fintech = self.run_cli(
+                db_path,
+                "query",
+                "run",
+                "--source",
+                "linkedin_mcp",
+                "--pack",
+                "FINTECH",
+                "--limit",
+                "25",
+            )
+            access = self.run_cli(
+                db_path,
+                "query",
+                "run",
+                "--source",
+                "manual_browser",
+                "--pack",
+                "ACCESS",
+                "--reason",
+                "specific access target role",
+            )
+
+            self.assertIn(
+                "query run prepared source=linkedin_mcp "
+                "pack=FINTECH type=default limit=25",
+                fintech.stdout,
+            )
+            self.assertIn("senior product manager payroll", fintech.stdout)
+            self.assertIn(
+                "query run prepared source=manual_browser pack=ACCESS type=exception",
+                access.stdout,
+            )
+            self.assertIn("reason=specific access target role", access.stdout)
 
     def test_import_pipeline_preserves_legacy_roles_and_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
