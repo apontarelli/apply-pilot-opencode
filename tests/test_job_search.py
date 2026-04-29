@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import subprocess
@@ -212,9 +213,9 @@ class JobSearchDatabaseTests(unittest.TestCase):
             second = self.run_cli(db_path, "init")
             status = self.run_cli(db_path, "status")
 
-            self.assertIn("schema_version=2", first.stdout)
-            self.assertIn("schema_version=2", second.stdout)
-            self.assertIn("schema_version=2", status.stdout)
+            self.assertIn("schema_version=3", first.stdout)
+            self.assertIn("schema_version=3", second.stdout)
+            self.assertIn("schema_version=3", status.stdout)
             self.assertIn("companies=0", status.stdout)
             self.assertIn("jobs=0", status.stdout)
             self.assertIn("actions=0", status.stdout)
@@ -223,7 +224,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 migration_count = connection.execute(
                     "SELECT COUNT(*) FROM schema_migrations"
                 ).fetchone()[0]
-                self.assertEqual(migration_count, 2)
+                self.assertEqual(migration_count, 3)
             self.assertEqual(db_path.stat().st_mode & 0o777, 0o600)
 
     def test_init_migrates_duplicate_open_actions_before_dedupe_index(self) -> None:
@@ -234,7 +235,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
             with closing(self.connect(db_path)) as connection:
                 with connection:
                     connection.execute("DROP INDEX idx_actions_open_dedupe")
-                    connection.execute("DELETE FROM schema_migrations WHERE version = 2")
+                    connection.execute("DELETE FROM schema_migrations WHERE version >= 2")
                     company_id = self.insert_company(connection, "Company A")
                     self.insert_action(connection, company_id)
                     self.insert_action(connection, company_id)
@@ -255,8 +256,8 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 with self.assertRaises(sqlite3.IntegrityError):
                     self.insert_action(connection, company_id)
 
-            self.assertIn("schema_version=2", migrated.stdout)
-            self.assertEqual([row[0] for row in versions], [1, 2])
+            self.assertIn("schema_version=3", migrated.stdout)
+            self.assertEqual([row[0] for row in versions], [1, 2, 3])
             self.assertEqual(actions[0][0], "queued")
             self.assertEqual(actions[1][0], "skipped")
             self.assertIn("schema v2 migration", actions[1][1])
@@ -1384,6 +1385,261 @@ class JobSearchDatabaseTests(unittest.TestCase):
 
             self.assertIn("reason=normalized_url", closed_url_duplicate.stdout)
             self.assertIn("job id=2 added", repost.stdout)
+
+    def test_polling_ats_sources_preserves_weak_matches_and_dedupes_active_roles(
+        self,
+    ) -> None:
+        cases = {
+            "greenhouse": {
+                "jobs": [
+                    {
+                        "id": 101,
+                        "title": "Senior Product Manager, Payments",
+                        "absolute_url": "https://boards.greenhouse.io/acme/jobs/101",
+                        "location": {"name": "Remote"},
+                    },
+                    {
+                        "id": 102,
+                        "title": "Customer Support Specialist",
+                        "absolute_url": "https://boards.greenhouse.io/acme/jobs/102",
+                        "location": {"name": "Remote"},
+                    },
+                ]
+            },
+            "lever": [
+                {
+                    "id": "lev-101",
+                    "text": "Senior Product Manager, Payments",
+                    "hostedUrl": "https://jobs.lever.co/acme/lev-101",
+                    "categories": {"location": "Remote"},
+                    "workplaceType": "remote",
+                },
+                {
+                    "id": "lev-102",
+                    "text": "Customer Support Specialist",
+                    "hostedUrl": "https://jobs.lever.co/acme/lev-102",
+                    "categories": {"location": "Remote"},
+                    "workplaceType": "remote",
+                },
+            ],
+            "ashby": {
+                "jobs": [
+                    {
+                        "id": "ash-101",
+                        "title": "Senior Product Manager, Payments",
+                        "jobUrl": "https://jobs.ashbyhq.com/acme/ash-101",
+                        "location": "Remote",
+                        "workplaceType": "Remote",
+                    },
+                    {
+                        "id": "ash-102",
+                        "title": "Customer Support Specialist",
+                        "jobUrl": "https://jobs.ashbyhq.com/acme/ash-102",
+                        "location": "Remote",
+                        "workplaceType": "Remote",
+                    },
+                ]
+            },
+        }
+
+        for ats_type, payload in cases.items():
+            with self.subTest(ats_type=ats_type):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    db_path = Path(tmpdir) / "job_search.sqlite"
+                    payload_path = Path(tmpdir) / f"{ats_type}.json"
+                    payload_path.write_text(json.dumps(payload), encoding="utf-8")
+
+                    self.run_cli(db_path, "init")
+                    self.run_cli(
+                        db_path,
+                        "company",
+                        "add",
+                        f"Acme {ats_type}",
+                        "--lanes",
+                        "fintech",
+                        "--target-roles",
+                        "Product Manager",
+                    )
+                    self.run_cli(
+                        db_path,
+                        "source",
+                        "add",
+                        f"Acme {ats_type}",
+                        "--type",
+                        ats_type,
+                        "--key",
+                        f"acme-{ats_type}",
+                        "--url",
+                        payload_path.as_uri(),
+                    )
+
+                    first_poll = self.run_cli(
+                        db_path, "poll", "--company", f"Acme {ats_type}"
+                    )
+                    second_poll = self.run_cli(
+                        db_path, "poll", "--company", f"Acme {ats_type}"
+                    )
+
+                    self.assertIn("discovered=2", first_poll.stdout)
+                    self.assertIn("inserted=2", first_poll.stdout)
+                    self.assertIn("ignored=1", first_poll.stdout)
+                    self.assertIn("screen_actions=1", first_poll.stdout)
+                    self.assertIn("inserted=0", second_poll.stdout)
+                    self.assertIn("duplicates=2", second_poll.stdout)
+
+                    with closing(self.connect(db_path)) as connection:
+                        jobs = connection.execute(
+                            """
+                            SELECT title, status, fit_score, lane
+                            FROM jobs
+                            ORDER BY id
+                            """
+                        ).fetchall()
+                        actions = connection.execute(
+                            """
+                            SELECT jobs.title, actions.queue, actions.kind
+                            FROM actions
+                            JOIN jobs ON jobs.id = actions.job_id
+                            ORDER BY actions.id
+                            """
+                        ).fetchall()
+
+                    self.assertEqual(
+                        jobs,
+                        [
+                            (
+                                "Senior Product Manager, Payments",
+                                "screening",
+                                75,
+                                "fintech",
+                            ),
+                            (
+                                "Customer Support Specialist",
+                                "ignored_by_filter",
+                                35,
+                                "fintech",
+                            ),
+                        ],
+                    )
+                    self.assertEqual(
+                        actions,
+                        [("Senior Product Manager, Payments", "screen", "screen_role")],
+                    )
+
+    def test_polling_scopes_source_ids_and_reports_per_source_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            first_payload_path = Path(tmpdir) / "first.json"
+            second_payload_path = Path(tmpdir) / "second.json"
+            first_payload_path.write_text(
+                json.dumps(
+                    {
+                        "jobs": [
+                            {
+                                "id": 101,
+                                "title": "Senior Product Manager, Payments",
+                                "absolute_url": "https://boards.greenhouse.io/first/jobs/101",
+                                "location": {"name": "Remote"},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            second_payload_path.write_text(
+                json.dumps(
+                    {
+                        "jobs": [
+                            {
+                                "id": 101,
+                                "title": "Senior Product Manager, Payments",
+                                "absolute_url": "https://boards.greenhouse.io/second/jobs/101",
+                                "location": {"name": "Remote"},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.run_cli(db_path, "init")
+            for company in ("Bad Co", "First Co", "Second Co"):
+                self.run_cli(
+                    db_path,
+                    "company",
+                    "add",
+                    company,
+                    "--lanes",
+                    "fintech",
+                    "--target-roles",
+                    "Product Manager",
+                )
+            self.run_cli(
+                db_path,
+                "source",
+                "add",
+                "Bad Co",
+                "--type",
+                "greenhouse",
+                "--key",
+                "bad",
+                "--url",
+                (Path(tmpdir) / "missing.json").as_uri(),
+            )
+            self.run_cli(
+                db_path,
+                "source",
+                "add",
+                "First Co",
+                "--type",
+                "greenhouse",
+                "--key",
+                "first",
+                "--url",
+                first_payload_path.as_uri(),
+            )
+            self.run_cli(
+                db_path,
+                "source",
+                "add",
+                "Second Co",
+                "--type",
+                "greenhouse",
+                "--key",
+                "second",
+                "--url",
+                second_payload_path.as_uri(),
+            )
+
+            result = subprocess.run(
+                [sys.executable, str(CLI), "--db-path", str(db_path), "poll"],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("company=Bad Co type=greenhouse failed error=", result.stdout)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertIn("company=First Co type=greenhouse discovered=1 inserted=1", result.stdout)
+            self.assertIn("company=Second Co type=greenhouse discovered=1 inserted=1", result.stdout)
+
+            with closing(self.connect(db_path)) as connection:
+                jobs = connection.execute(
+                    "SELECT source, source_job_id FROM jobs ORDER BY source"
+                ).fetchall()
+                action_count = connection.execute(
+                    "SELECT COUNT(*) FROM actions WHERE queue = 'screen'"
+                ).fetchone()[0]
+
+            self.assertEqual(
+                jobs,
+                [
+                    ("greenhouse:first", "101"),
+                    ("greenhouse:second", "101"),
+                ],
+            )
+            self.assertEqual(action_count, 2)
 
     def test_metrics_aggregates_weekly_review_counts(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

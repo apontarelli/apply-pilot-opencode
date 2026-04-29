@@ -4,20 +4,30 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sqlite3
 import sys
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = REPO_ROOT / "APPLICATIONS" / "_ops" / "job_search.sqlite"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 OPEN_ACTION_STATUSES = ("queued", "in_progress", "blocked", "rescheduled")
 TERMINAL_ACTION_STATUSES = ("done", "skipped")
+ATS_TYPES = ("greenhouse", "lever", "ashby")
+SOURCE_STATUSES = ("active", "paused", "archived")
+POLL_SCREEN_FIT_SCORE = 75
+POLL_IGNORED_FIT_SCORE = 35
+HTTP_TIMEOUT_SECONDS = 20
+HTTP_USER_AGENT = "apply-pilot-job-search/1.0"
 JOB_GENERATED_ACTIONS = (
     ("screen", "screen_role", "Promising role needs screening."),
     ("apply", "apply", "Role is marked ready to apply."),
@@ -73,6 +83,22 @@ GENERIC_TITLE_TOKENS = {
 }
 
 
+@dataclass(frozen=True)
+class DiscoveredJob:
+    title: str
+    canonical_url: str | None
+    source_job_id: str | None
+    location: str | None = None
+    remote_status: str | None = None
+    compensation_signal: str | None = None
+
+
+@dataclass(frozen=True)
+class PollStoreResult:
+    status: str
+    job_id: int | None = None
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
@@ -102,6 +128,25 @@ CREATE TABLE IF NOT EXISTS companies (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS company_sources (
+    id INTEGER PRIMARY KEY,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    source_type TEXT NOT NULL
+        CHECK (source_type IN ('greenhouse', 'lever', 'ashby')),
+    source_key TEXT NOT NULL,
+    source_url TEXT,
+    status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'paused', 'archived')),
+    last_polled_at TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(company_id, source_type, source_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_company_sources_status
+    ON company_sources(status, source_type);
 
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY,
@@ -471,6 +516,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_actions_open_dedupe
     WHERE status IN ('queued', 'in_progress', 'blocked', 'rescheduled');
 """
 
+SOURCE_DEFINITIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS company_sources (
+    id INTEGER PRIMARY KEY,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    source_type TEXT NOT NULL
+        CHECK (source_type IN ('greenhouse', 'lever', 'ashby')),
+    source_key TEXT NOT NULL,
+    source_url TEXT,
+    status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'paused', 'archived')),
+    last_polled_at TEXT,
+    notes TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(company_id, source_type, source_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_company_sources_status
+    ON company_sources(status, source_type);
+"""
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -676,6 +742,211 @@ def format_duplicate_match(match: dict[str, object]) -> str:
     )
 
 
+def split_configured_terms(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [
+        term.strip()
+        for term in re.split(r"[,;\n|]+", value)
+        if term.strip()
+    ]
+
+
+def first_configured_lane(lanes: str | None) -> str | None:
+    lanes = split_configured_terms(lanes)
+    return lanes[0] if lanes else None
+
+
+def title_matches_target_role(title: str, target_role: str) -> bool:
+    normalized_title = normalize_title(title)
+    normalized_target = normalize_title(target_role)
+    if not normalized_target:
+        return False
+    if normalized_target in normalized_title:
+        return True
+
+    target_tokens = set(normalized_target.split()) - GENERIC_TITLE_TOKENS
+    title_tokens = set(normalized_title.split())
+    return bool(target_tokens) and target_tokens.issubset(title_tokens)
+
+
+def classify_polled_job(
+    company: sqlite3.Row,
+    discovered: DiscoveredJob,
+) -> tuple[str, int, str | None, str]:
+    target_roles = split_configured_terms(company["target_roles"])
+    if any(title_matches_target_role(discovered.title, role) for role in target_roles):
+        return (
+            "screening",
+            POLL_SCREEN_FIT_SCORE,
+            first_configured_lane(company["lanes"]),
+            "target_role_match",
+        )
+    return (
+        "ignored_by_filter",
+        POLL_IGNORED_FIT_SCORE,
+        first_configured_lane(company["lanes"]),
+        "ignored_by_filter",
+    )
+
+
+def source_endpoint_url(source: sqlite3.Row) -> str:
+    if source["source_url"]:
+        return source["source_url"]
+    source_key = quote(source["source_key"].strip(), safe="")
+    if source["source_type"] == "greenhouse":
+        return f"https://boards-api.greenhouse.io/v1/boards/{source_key}/jobs?content=true"
+    if source["source_type"] == "lever":
+        return f"https://api.lever.co/v0/postings/{source_key}?mode=json"
+    if source["source_type"] == "ashby":
+        return (
+            "https://api.ashbyhq.com/posting-api/job-board/"
+            f"{source_key}?includeCompensation=true"
+        )
+    raise ValueError(f"Unsupported source type: {source['source_type']}")
+
+
+def job_source_identity(source: sqlite3.Row) -> str:
+    return f"{source['source_type']}:{source['source_key']}"
+
+
+def fetch_json(url: str) -> object:
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": HTTP_USER_AGENT,
+        },
+    )
+    with urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def extract_compensation_signal(value: object) -> str | None:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        for key in (
+            "compensationTierSummary",
+            "scrapeableCompensationSalarySummary",
+            "salaryDescriptionPlain",
+        ):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate.strip():
+                return candidate.strip()
+        if {"min", "max", "currency"} <= set(value):
+            return f"{value['currency']} {value['min']}-{value['max']}"
+    return None
+
+
+def parse_greenhouse_jobs(payload: object) -> list[DiscoveredJob]:
+    if not isinstance(payload, dict):
+        raise ValueError("Greenhouse response must be a JSON object")
+    jobs = payload.get("jobs")
+    if not isinstance(jobs, list):
+        raise ValueError("Greenhouse response missing jobs array")
+    discovered: list[DiscoveredJob] = []
+    for job in jobs:
+        if not isinstance(job, dict) or not job.get("title"):
+            continue
+        location = job.get("location")
+        discovered.append(
+            DiscoveredJob(
+                title=str(job["title"]),
+                canonical_url=str(job["absolute_url"]) if job.get("absolute_url") else None,
+                source_job_id=str(job["id"]) if job.get("id") is not None else None,
+                location=(
+                    str(location.get("name"))
+                    if isinstance(location, dict) and location.get("name")
+                    else None
+                ),
+            )
+        )
+    return discovered
+
+
+def parse_lever_jobs(payload: object) -> list[DiscoveredJob]:
+    if not isinstance(payload, list):
+        raise ValueError("Lever response must be a JSON array")
+    discovered: list[DiscoveredJob] = []
+    for job in payload:
+        if not isinstance(job, dict) or not job.get("text"):
+            continue
+        categories = job.get("categories") if isinstance(job.get("categories"), dict) else {}
+        discovered.append(
+            DiscoveredJob(
+                title=str(job["text"]),
+                canonical_url=(
+                    str(job["hostedUrl"])
+                    if job.get("hostedUrl")
+                    else str(job["applyUrl"])
+                    if job.get("applyUrl")
+                    else None
+                ),
+                source_job_id=str(job["id"]) if job.get("id") is not None else None,
+                location=(
+                    str(categories.get("location"))
+                    if categories.get("location")
+                    else None
+                ),
+                remote_status=(
+                    str(job["workplaceType"])
+                    if job.get("workplaceType")
+                    else None
+                ),
+                compensation_signal=extract_compensation_signal(job.get("salaryRange"))
+                or extract_compensation_signal(job.get("salaryDescriptionPlain")),
+            )
+        )
+    return discovered
+
+
+def parse_ashby_jobs(payload: object) -> list[DiscoveredJob]:
+    if not isinstance(payload, dict):
+        raise ValueError("Ashby response must be a JSON object")
+    jobs = payload.get("jobs")
+    if not isinstance(jobs, list):
+        raise ValueError("Ashby response missing jobs array")
+    discovered: list[DiscoveredJob] = []
+    for job in jobs:
+        if not isinstance(job, dict) or not job.get("title"):
+            continue
+        canonical_url = str(job["jobUrl"]) if job.get("jobUrl") else None
+        source_job_id = (
+            str(job["id"])
+            if job.get("id") is not None
+            else canonical_url
+        )
+        discovered.append(
+            DiscoveredJob(
+                title=str(job["title"]),
+                canonical_url=canonical_url,
+                source_job_id=source_job_id,
+                location=str(job["location"]) if job.get("location") else None,
+                remote_status=(
+                    str(job["workplaceType"])
+                    if job.get("workplaceType")
+                    else "Remote"
+                    if job.get("isRemote") is True
+                    else None
+                ),
+                compensation_signal=extract_compensation_signal(job.get("compensation")),
+            )
+        )
+    return discovered
+
+
+def fetch_source_jobs(source: sqlite3.Row) -> list[DiscoveredJob]:
+    payload = fetch_json(source_endpoint_url(source))
+    if source["source_type"] == "greenhouse":
+        return parse_greenhouse_jobs(payload)
+    if source["source_type"] == "lever":
+        return parse_lever_jobs(payload)
+    if source["source_type"] == "ashby":
+        return parse_ashby_jobs(payload)
+    raise ValueError(f"Unsupported source type: {source['source_type']}")
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path)
@@ -742,6 +1013,17 @@ def migrate_database(connection: sqlite3.Connection) -> None:
             VALUES (?, ?, ?)
             """,
             (2, "open_action_dedupe", now),
+        )
+        version = 2
+    if version < 3:
+        now = utc_now()
+        connection.executescript(SOURCE_DEFINITIONS_SCHEMA)
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
+            VALUES (?, ?, ?)
+            """,
+            (3, "company_source_definitions", now),
         )
 
 
@@ -1269,6 +1551,44 @@ def create_company(
     return company_id
 
 
+def create_company_source(
+    connection: sqlite3.Connection,
+    args: argparse.Namespace,
+) -> int:
+    company = get_company(connection, args.company)
+    now = utc_now()
+    source_url = args.url.strip() if args.url else None
+    cursor = connection.execute(
+        """
+        INSERT INTO company_sources(
+            company_id, source_type, source_key, source_url, status, notes,
+            created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            company["id"],
+            args.source_type,
+            args.source_key,
+            source_url,
+            args.status,
+            args.notes,
+            now,
+            now,
+        ),
+    )
+    connection.execute(
+        """
+        UPDATE companies
+        SET ats_type = COALESCE(ats_type, ?),
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (args.source_type, now, company["id"]),
+    )
+    return int(cursor.lastrowid)
+
+
 def update_columns(
     connection: sqlite3.Connection,
     table: str,
@@ -1614,6 +1934,238 @@ def command_company_show(args: argparse.Namespace) -> int:
 
     print(f"Next best action: {format_action(next_action) if next_action else 'none'}")
     return 0
+
+
+def command_source_add(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    with closing(connect(db_path)) as connection:
+        with connection:
+            source_id = create_company_source(connection, args)
+    print(
+        f"source added id={source_id} company={args.company} "
+        f"type={args.source_type} key={args.source_key}"
+    )
+    return 0
+
+
+def command_source_list(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    filters = []
+    params: list[object] = []
+    if args.company:
+        filters.append("companies.name_key = ?")
+        params.append(company_name_key(args.company))
+    if args.status:
+        filters.append("company_sources.status = ?")
+        params.append(args.status)
+    where = f"WHERE {' AND '.join(filters)}" if filters else ""
+    with closing(connect(db_path)) as connection:
+        rows = connection.execute(
+            f"""
+            SELECT company_sources.*, companies.name AS company_name
+            FROM company_sources
+            JOIN companies ON companies.id = company_sources.company_id
+            {where}
+            ORDER BY companies.name_key, company_sources.source_type, company_sources.id
+            """,
+            params,
+        ).fetchall()
+    for row in rows:
+        parts = [
+            f"id={row['id']}",
+            f"company={row['company_name']}",
+            f"type={row['source_type']}",
+            f"key={row['source_key']}",
+            f"status={row['status']}",
+            f"last_polled={row['last_polled_at'] or 'never'}",
+        ]
+        if row["source_url"]:
+            parts.append(f"url={row['source_url']}")
+        print(" | ".join(parts))
+    if not rows:
+        print("no sources")
+    return 0
+
+
+def poll_source_rows(
+    connection: sqlite3.Connection,
+    *,
+    company: str | None,
+    source_id: int | None,
+) -> list[sqlite3.Row]:
+    filters = ["company_sources.status = 'active'"]
+    params: list[object] = []
+    if company:
+        filters.append("companies.name_key = ?")
+        params.append(company_name_key(company))
+    if source_id is not None:
+        filters.append("company_sources.id = ?")
+        params.append(source_id)
+    where = f"WHERE {' AND '.join(filters)}"
+    return connection.execute(
+        f"""
+        SELECT company_sources.*, companies.name AS company_name
+        FROM company_sources
+        JOIN companies ON companies.id = company_sources.company_id
+        {where}
+        ORDER BY companies.name_key, company_sources.id
+        """,
+        params,
+    ).fetchall()
+
+
+def store_polled_job(
+    connection: sqlite3.Connection,
+    *,
+    source: sqlite3.Row,
+    discovered: DiscoveredJob,
+    now: str,
+) -> PollStoreResult:
+    company = connection.execute(
+        "SELECT * FROM companies WHERE id = ?", (source["company_id"],)
+    ).fetchone()
+    if company is None:
+        raise ValueError(f"Company not found for source: {source['id']}")
+    canonical_url = normalize_url(discovered.canonical_url)
+    status, fit_score, lane, discovery_status = classify_polled_job(company, discovered)
+    duplicate_matches = job_duplicate_matches(
+        connection,
+        company_id=int(company["id"]),
+        title=discovered.title,
+        canonical_url=canonical_url,
+        source=job_source_identity(source),
+        source_job_id=discovered.source_job_id,
+        location=discovered.location,
+        remote_status=discovered.remote_status,
+        now=now,
+    )
+    if duplicate_matches:
+        return PollStoreResult(status="duplicate")
+
+    cursor = connection.execute(
+        """
+        INSERT INTO jobs(
+            company_id, title, canonical_url, source, source_job_id, location,
+            remote_status, lane, status, discovery_status, fit_score,
+            compensation_signal, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            company["id"],
+            discovered.title,
+            canonical_url,
+            job_source_identity(source),
+            discovered.source_job_id,
+            discovered.location,
+            discovered.remote_status,
+            lane,
+            status,
+            discovery_status,
+            fit_score,
+            discovered.compensation_signal,
+            now,
+            now,
+        ),
+    )
+    job_id = int(cursor.lastrowid)
+    generate_job_actions(connection, job_id=job_id, now=now)
+    log_event(
+        connection,
+        company_id=int(company["id"]),
+        job_id=job_id,
+        event_type="job_added",
+        notes=f"poll:{source['source_type']}:{discovered.title}",
+        now=now,
+    )
+    return PollStoreResult(status=status, job_id=job_id)
+
+
+def command_poll(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    with closing(connect(db_path)) as connection:
+        sources = poll_source_rows(
+            connection,
+            company=args.company,
+            source_id=args.source_id,
+        )
+        if not sources:
+            print("no active sources")
+            return 0
+
+        failed = False
+        for source in sources:
+            now = utc_now()
+            try:
+                discovered_jobs = fetch_source_jobs(source)
+            except (HTTPError, URLError, OSError, ValueError) as error:
+                failed = True
+                print(
+                    "poll "
+                    f"source_id={source['id']} company={source['company_name']} "
+                    f"type={source['source_type']} failed error={error}"
+                )
+                continue
+            inserted = 0
+            ignored = 0
+            duplicates = 0
+            screen_actions = 0
+            with connection:
+                for discovered in discovered_jobs:
+                    result = store_polled_job(
+                        connection,
+                        source=source,
+                        discovered=discovered,
+                        now=now,
+                    )
+                    if result.status == "duplicate":
+                        duplicates += 1
+                        continue
+                    inserted += 1
+                    if result.status == "ignored_by_filter":
+                        ignored += 1
+                    if result.status == "screening" and result.job_id is not None:
+                        action = connection.execute(
+                            """
+                            SELECT 1
+                            FROM actions
+                            WHERE job_id = ?
+                                AND queue = 'screen'
+                                AND kind = 'screen_role'
+                                AND status IN ('queued', 'in_progress', 'blocked', 'rescheduled')
+                            LIMIT 1
+                            """,
+                            (result.job_id,),
+                        ).fetchone()
+                        if action is not None:
+                            screen_actions += 1
+                connection.execute(
+                    """
+                    UPDATE company_sources
+                    SET last_polled_at = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, now, source["id"]),
+                )
+                connection.execute(
+                    """
+                    UPDATE companies
+                    SET last_checked_at = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, now, source["company_id"]),
+                )
+            print(
+                "poll "
+                f"source_id={source['id']} company={source['company_name']} "
+                f"type={source['source_type']} discovered={len(discovered_jobs)} "
+                f"inserted={inserted} ignored={ignored} duplicates={duplicates} "
+                f"screen_actions={screen_actions}"
+            )
+    return 1 if failed else 0
 
 
 def command_job_add(args: argparse.Namespace) -> int:
@@ -2601,6 +3153,25 @@ def parse_args() -> argparse.Namespace:
     company_list.add_argument("--status", choices=COMPANY_STATUSES)
     company_list.add_argument("--tier", type=int, choices=(1, 2, 3))
 
+    source = subparsers.add_parser("source", help="Manage target-company ATS sources.")
+    source_subparsers = source.add_subparsers(
+        dest="source_command", metavar="command", required=True
+    )
+    source_add = source_subparsers.add_parser("add", help="Add an ATS source.")
+    source_add.add_argument("company")
+    source_add.add_argument("--type", dest="source_type", choices=ATS_TYPES, required=True)
+    source_add.add_argument("--key", dest="source_key", required=True)
+    source_add.add_argument("--url")
+    source_add.add_argument("--status", choices=SOURCE_STATUSES, default="active")
+    source_add.add_argument("--notes")
+    source_list = source_subparsers.add_parser("list", help="List ATS sources.")
+    source_list.add_argument("--company")
+    source_list.add_argument("--status", choices=SOURCE_STATUSES)
+
+    poll = subparsers.add_parser("poll", help="Poll configured active ATS sources.")
+    poll.add_argument("--company")
+    poll.add_argument("--source-id", type=int)
+
     job = subparsers.add_parser("job", help="Manage company roles.")
     job_subparsers = job.add_subparsers(dest="job_command", metavar="command", required=True)
     job_add = job_subparsers.add_parser("add", help="Add a job.")
@@ -2805,6 +3376,13 @@ def main() -> int:
                 return command_company_show(args)
             if args.company_command == "list":
                 return command_company_list(args)
+        if args.command == "source":
+            if args.source_command == "add":
+                return command_source_add(args)
+            if args.source_command == "list":
+                return command_source_list(args)
+        if args.command == "poll":
+            return command_poll(args)
         if args.command == "job":
             if args.job_command == "add":
                 return command_job_add(args)
