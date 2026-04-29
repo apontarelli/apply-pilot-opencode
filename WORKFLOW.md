@@ -95,6 +95,7 @@ Use these global skills when the matching workflow phase is reached:
 - `symphony-commit`: commit or describe completed task changes with validation evidence.
 - `symphony-pull`: sync with latest mainline and resolve conflicts.
 - `symphony-quality-gates`: classify and run required pre-handoff quality gates.
+- `symphony-review`: run the final review pass after validation and quality gates, before push or handoff.
 - `symphony-push`: publish branch/PR and move ready work to `Human Review`.
 - `symphony-land`: merge approved PRs from `Merging`.
 - `symphony-debug`: investigate stalled or failing Symphony runs.
@@ -143,8 +144,9 @@ If this project uses different Linear state names, adapt to the nearest matching
 6. Implement the smallest coherent change that satisfies the issue.
 7. Run the strongest feasible validation for the touched surface.
 8. Run `symphony-quality-gates` and address required gate findings.
-9. Commit, push, open/update a PR, and attach the PR to the issue when repository tooling and permissions allow.
-10. Move the issue to `Human Review` only when the completion bar is satisfied.
+9. Run `symphony-review` and address required review findings.
+10. Commit, push, open/update a PR, and attach the PR to the issue when repository tooling and permissions allow.
+11. Move the issue to `Human Review` only when the completion bar is satisfied.
 
 ## Validation Commands
 
@@ -159,6 +161,7 @@ Ticket-provided `Validation`, `Test Plan`, or `Testing` requirements are mandato
 - Workpad plan, acceptance criteria, and validation checklist are accurate and checked off.
 - Required ticket validation has passed or a true blocker is documented.
 - `symphony-quality-gates` passed, or blockers are documented in the workpad.
+- `symphony-review` passed, or required review findings are resolved/documented.
 - Relevant tests/checks are green for the latest commit.
 - PR is linked on the issue when changes were made and publishing is available.
 - Reviewer-facing notes are concise and live in the workpad, not scattered across new comments.
@@ -190,6 +193,10 @@ Ticket-provided `Validation`, `Test Plan`, or `Testing` requirements are mandato
 - [ ] Classifier: <summary>
 - [ ] Required gates: <none | test-deslop | document-gardening | deslop | parallel review>
 - [ ] Evidence: <commands/findings/results>
+
+### Review
+
+- [ ] `symphony-review` - findings resolved or documented
 
 ### Runtime URLs
 
