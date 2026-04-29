@@ -10,6 +10,7 @@ import sys
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -50,6 +51,26 @@ EVENT_TYPES = (
     "status_changed",
     "note",
 )
+NO_INTERVIEW_COOLDOWN_DAYS = 45
+INTERVIEW_LOOP_COOLDOWN_DAYS = 120
+LIKELY_DUPLICATE_WINDOW_DAYS = 60
+GENERIC_TITLE_TOKENS = {
+    "associate",
+    "director",
+    "group",
+    "head",
+    "ii",
+    "iii",
+    "lead",
+    "manager",
+    "principal",
+    "product",
+    "program",
+    "senior",
+    "staff",
+    "sr",
+    "the",
+}
 
 
 SCHEMA = """
@@ -473,6 +494,188 @@ def company_name_key(name: str) -> str:
     return re.sub(r"\s+", " ", name.strip()).casefold()
 
 
+def normalize_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    parsed = urlsplit(url.strip())
+    path = re.sub(r"/+", "/", parsed.path).rstrip("/")
+    cleaned = parsed._replace(
+        scheme=parsed.scheme.lower(),
+        netloc=parsed.netloc.lower(),
+        path=path,
+        query="",
+        fragment="",
+    )
+    return urlunsplit(cleaned)
+
+
+def normalize_match_text(value: str | None) -> str:
+    if not value:
+        return ""
+    return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+
+
+def normalize_title(value: str | None) -> str:
+    return normalize_match_text(value)
+
+
+def title_keywords(value: str | None) -> set[str]:
+    return {
+        token
+        for token in normalize_title(value).split()
+        if token and token not in GENERIC_TITLE_TOKENS
+    }
+
+
+def parse_optional_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    parsed = parse_utc(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def is_materially_different_role(candidate: sqlite3.Row, prior: sqlite3.Row) -> bool:
+    if candidate["lane"] and prior["lane"] and candidate["lane"] != prior["lane"]:
+        return True
+
+    candidate_tokens = title_keywords(candidate["title"])
+    prior_tokens = title_keywords(prior["title"])
+    if candidate_tokens and prior_tokens and candidate_tokens.isdisjoint(prior_tokens):
+        return True
+
+    return False
+
+
+def latest_rejected_job(
+    connection: sqlite3.Connection,
+    *,
+    company_id: int,
+) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        SELECT jobs.*
+        FROM events
+        JOIN jobs ON jobs.id = events.job_id
+        WHERE events.company_id = ?
+            AND events.event_type = 'rejection_received'
+        ORDER BY events.happened_at DESC, events.id DESC
+        LIMIT 1
+        """,
+        (company_id,),
+    ).fetchone()
+
+
+def job_can_bypass_company_cooldown(
+    connection: sqlite3.Connection,
+    *,
+    job: sqlite3.Row,
+    now: str,
+) -> bool:
+    company = connection.execute(
+        "SELECT cooldown_until FROM companies WHERE id = ?",
+        (job["company_id"],),
+    ).fetchone()
+    cooldown_until = parse_optional_utc(company["cooldown_until"] if company else None)
+    if cooldown_until is None or cooldown_until <= parse_utc(now):
+        return True
+
+    prior = latest_rejected_job(connection, company_id=int(job["company_id"]))
+    return prior is not None and is_materially_different_role(job, prior)
+
+
+def job_duplicate_matches(
+    connection: sqlite3.Connection,
+    *,
+    company_id: int,
+    title: str,
+    canonical_url: str | None,
+    source: str | None,
+    source_job_id: str | None,
+    location: str | None,
+    remote_status: str | None,
+    now: str,
+) -> list[dict[str, object]]:
+    normalized_url = normalize_url(canonical_url)
+    normalized_title = normalize_title(title)
+    normalized_location = normalize_match_text(location)
+    normalized_remote = normalize_match_text(remote_status)
+    window_start = (parse_utc(now) - timedelta(days=LIKELY_DUPLICATE_WINDOW_DAYS)).isoformat()
+
+    matches: list[dict[str, object]] = []
+    rows = connection.execute(
+        """
+        SELECT jobs.*, companies.name AS company_name
+        FROM jobs
+        JOIN companies ON companies.id = jobs.company_id
+        ORDER BY jobs.id
+        """
+    ).fetchall()
+    for row in rows:
+        if normalized_url and normalize_url(row["canonical_url"]) == normalized_url:
+            matches.append(
+                {
+                    "level": "strong",
+                    "reason": "normalized_url",
+                    "job_id": row["id"],
+                    "title": row["title"],
+                    "company": row["company_name"],
+                }
+            )
+            continue
+        if (
+            source
+            and source_job_id
+            and row["source_job_id"]
+            and normalize_match_text(row["source"]) == normalize_match_text(source)
+            and row["source_job_id"] == source_job_id
+        ):
+            matches.append(
+                {
+                    "level": "strong",
+                    "reason": "source_job_id",
+                    "job_id": row["id"],
+                    "title": row["title"],
+                    "company": row["company_name"],
+                }
+            )
+            continue
+        if int(row["company_id"]) != company_id:
+            continue
+        same_title = normalize_title(row["title"]) == normalized_title
+        same_location = (
+            normalized_location
+            and normalize_match_text(row["location"]) == normalized_location
+        ) or (
+            normalized_remote
+            and normalize_match_text(row["remote_status"]) == normalized_remote
+        )
+        if (
+            row["status"] not in ("closed", "archived")
+            and same_title
+            and same_location
+            and row["created_at"] >= window_start
+        ):
+            matches.append(
+                {
+                    "level": "likely",
+                    "reason": "same_company_title_location_window",
+                    "job_id": row["id"],
+                    "title": row["title"],
+                    "company": row["company_name"],
+                }
+            )
+    return matches
+
+
+def format_duplicate_match(match: dict[str, object]) -> str:
+    return (
+        f"job duplicate level={match['level']} existing_id={match['job_id']} "
+        f"reason={match['reason']} company={match['company']} title={match['title']}"
+    )
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     connection = sqlite3.connect(db_path)
@@ -811,7 +1014,86 @@ def log_event(
     )
     if event_type != "company_added":
         touch_company(connection, company_id, happened_at)
+    if event_type == "rejection_received":
+        apply_rejection_cooldown(
+            connection,
+            company_id=company_id,
+            job_id=job_id,
+            happened_at=happened_at,
+            notes=notes,
+            now=now,
+        )
     return int(cursor.lastrowid)
+
+
+def rejection_had_interview_loop(
+    connection: sqlite3.Connection,
+    *,
+    company_id: int,
+    job_id: int | None,
+    happened_at: str,
+    notes: str | None,
+) -> bool:
+    normalized_notes = normalize_match_text(notes)
+    if "no interview" in normalized_notes or "without interview" in normalized_notes:
+        return False
+    if "interview" in normalized_notes or "loop" in normalized_notes:
+        return True
+
+    predicates = ["company_id = ?", "event_type = 'interview'", "happened_at <= ?"]
+    params: list[object] = [company_id, happened_at]
+    if job_id is not None:
+        predicates.append("job_id = ?")
+        params.append(job_id)
+    row = connection.execute(
+        f"""
+        SELECT 1
+        FROM events
+        WHERE {' AND '.join(predicates)}
+        LIMIT 1
+        """,
+        tuple(params),
+    ).fetchone()
+    return row is not None
+
+
+def apply_rejection_cooldown(
+    connection: sqlite3.Connection,
+    *,
+    company_id: int,
+    job_id: int | None,
+    happened_at: str,
+    notes: str | None,
+    now: str,
+) -> None:
+    base = parse_utc(happened_at)
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=timezone.utc)
+    days = (
+        INTERVIEW_LOOP_COOLDOWN_DAYS
+        if rejection_had_interview_loop(
+            connection,
+            company_id=company_id,
+            job_id=job_id,
+            happened_at=happened_at,
+            notes=notes,
+        )
+        else NO_INTERVIEW_COOLDOWN_DAYS
+    )
+    cooldown_until = (base + timedelta(days=days)).isoformat()
+    connection.execute(
+        """
+        UPDATE companies
+        SET status = 'cooldown',
+            cooldown_until = CASE
+                WHEN cooldown_until IS NULL OR cooldown_until < ? THEN ?
+                ELSE cooldown_until
+            END,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (cooldown_until, cooldown_until, now, company_id),
+    )
 
 
 def generate_company_actions(
@@ -857,7 +1139,8 @@ def generate_job_actions(
     if should_screen:
         active_actions.add(("screen", "screen_role"))
     if job["status"] == "ready_to_apply":
-        active_actions.add(("apply", "apply"))
+        if job_can_bypass_company_cooldown(connection, job=job, now=now):
+            active_actions.add(("apply", "apply"))
     if job["status"] == "applied":
         active_actions.add(("follow_up", "follow_up"))
     if job["status"] == "rejected" or job["rejection_reason"]:
@@ -881,7 +1164,9 @@ def generate_job_actions(
             now=now,
         )
 
-    if job["status"] == "ready_to_apply":
+    if job["status"] == "ready_to_apply" and job_can_bypass_company_cooldown(
+        connection, job=job, now=now
+    ):
         upsert_generated_job_action(
             connection,
             company_id=company_id,
@@ -1258,10 +1543,29 @@ def command_company_show(args: argparse.Namespace) -> int:
         next_action = actions[0] if actions else None
         last_outcome = connection.execute(
             """
-            SELECT event_type, happened_at, notes
+            SELECT events.event_type, events.happened_at, events.notes, jobs.title AS job_title
             FROM events
-            WHERE company_id = ?
-            ORDER BY happened_at DESC, id DESC
+            LEFT JOIN jobs ON jobs.id = events.job_id
+            WHERE events.company_id = ?
+                AND event_type IN (
+                    'application_submitted',
+                    'interview',
+                    'rejection_received',
+                    'status_changed'
+                )
+            ORDER BY events.happened_at DESC, events.id DESC
+            LIMIT 1
+            """,
+            (company["id"],),
+        ).fetchone()
+        last_application = connection.execute(
+            """
+            SELECT events.happened_at, jobs.title AS job_title
+            FROM events
+            JOIN jobs ON jobs.id = events.job_id
+            WHERE events.company_id = ?
+                AND events.event_type = 'application_submitted'
+            ORDER BY events.happened_at DESC, events.id DESC
             LIMIT 1
             """,
             (company["id"],),
@@ -1280,9 +1584,16 @@ def command_company_show(args: argparse.Namespace) -> int:
     )
     print(f"Cooldown: {company['cooldown_until'] or 'none'}")
     print(f"Last touched: last_touched_at={company['last_touched_at'] or 'none'}")
-    if last_outcome:
+    if last_application:
         print(
-            f"Last outcome: {last_outcome['event_type']} at {last_outcome['happened_at']}"
+            f"Last applied role: {last_application['job_title']} at {last_application['happened_at']}"
+        )
+    else:
+        print("Last applied role: none")
+    if last_outcome:
+        subject = f" job={last_outcome['job_title']}" if last_outcome["job_title"] else ""
+        print(
+            f"Last outcome: {last_outcome['event_type']} at {last_outcome['happened_at']}{subject}"
         )
     else:
         print("Last outcome: none")
@@ -1316,6 +1627,21 @@ def command_job_add(args: argparse.Namespace) -> int:
     with closing(connect(db_path)) as connection:
         with connection:
             company = get_company(connection, company_name)
+            canonical_url = normalize_url(args.url)
+            duplicate_matches = job_duplicate_matches(
+                connection,
+                company_id=int(company["id"]),
+                title=title,
+                canonical_url=canonical_url,
+                source=args.source,
+                source_job_id=args.source_job_id,
+                location=args.location,
+                remote_status=args.remote_status,
+                now=now,
+            )
+            if duplicate_matches:
+                print(format_duplicate_match(duplicate_matches[0]))
+                return 0
             cursor = connection.execute(
                 """
                 INSERT INTO jobs(
@@ -1331,7 +1657,7 @@ def command_job_add(args: argparse.Namespace) -> int:
                 (
                     company["id"],
                     title,
-                    args.url,
+                    canonical_url,
                     args.source,
                     args.source_job_id,
                     args.location,
@@ -1386,7 +1712,7 @@ def command_job_update(args: argparse.Namespace) -> int:
                 key: value
                 for key, value in {
                     "title": getattr(args, "title", None),
-                    "canonical_url": args.url,
+                    "canonical_url": normalize_url(args.url),
                     "source": args.source,
                     "source_job_id": args.source_job_id,
                     "location": args.location,
@@ -1418,7 +1744,11 @@ def command_job_update(args: argparse.Namespace) -> int:
                     job_id=args.job_id,
                     event_type=event_type_for_job_status(args.status),
                     happened_at=getattr(args, "happened_at", None),
-                    notes=getattr(args, "notes", None) or f"{job['status']} -> {args.status}",
+                    notes=(
+                        getattr(args, "notes", None)
+                        or args.rejection_reason
+                        or f"{job['status']} -> {args.status}"
+                    ),
                 )
     print(f"job updated id={args.job_id}")
     return 0
@@ -1893,6 +2223,169 @@ def command_event_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def percent(numerator: int, denominator: int) -> str:
+    if denominator == 0:
+        return "0.0%"
+    return f"{(numerator / denominator) * 100:.1f}%"
+
+
+def command_metrics(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    until = parse_optional_utc(args.until) if args.until else datetime.now(timezone.utc)
+    assert until is not None
+    since = (
+        parse_optional_utc(args.since)
+        if args.since
+        else until - timedelta(days=args.days)
+    )
+    assert since is not None
+    since_text = since.isoformat()
+    until_text = until.isoformat()
+
+    with closing(connect(db_path)) as connection:
+        jobs_screened = connection.execute(
+            """
+            SELECT COUNT(DISTINCT job_id)
+            FROM actions
+            WHERE queue = 'screen'
+                AND status = 'done'
+                AND job_id IS NOT NULL
+                AND completed_at >= ?
+                AND completed_at < ?
+            """,
+            (since_text, until_text),
+        ).fetchone()[0]
+        applications_submitted = connection.execute(
+            """
+            SELECT COUNT(DISTINCT job_id)
+            FROM events
+            WHERE event_type = 'application_submitted'
+                AND job_id IS NOT NULL
+                AND happened_at >= ?
+                AND happened_at < ?
+            """,
+            (since_text, until_text),
+        ).fetchone()[0]
+        applications_by_lane = connection.execute(
+            """
+            SELECT COALESCE(jobs.lane, 'unset') AS lane, COUNT(DISTINCT events.job_id) AS count
+            FROM events
+            JOIN jobs ON jobs.id = events.job_id
+            WHERE events.event_type = 'application_submitted'
+                AND events.happened_at >= ?
+                AND events.happened_at < ?
+            GROUP BY COALESCE(jobs.lane, 'unset')
+            ORDER BY lane
+            """,
+            (since_text, until_text),
+        ).fetchall()
+        ready_jobs = connection.execute(
+            """
+            SELECT COUNT(DISTINCT job_id)
+            FROM events
+            WHERE job_id IS NOT NULL
+                AND event_type = 'status_changed'
+                AND notes LIKE '%ready_to_apply%'
+                AND happened_at >= ?
+                AND happened_at < ?
+            """,
+            (since_text, until_text),
+        ).fetchone()[0]
+        interviews = connection.execute(
+            """
+            SELECT COUNT(DISTINCT job_id)
+            FROM events
+            WHERE event_type = 'interview'
+                AND job_id IS NOT NULL
+                AND happened_at >= ?
+                AND happened_at < ?
+            """,
+            (since_text, until_text),
+        ).fetchone()[0]
+        rejections = connection.execute(
+            """
+            SELECT COUNT(DISTINCT job_id)
+            FROM events
+            WHERE event_type = 'rejection_received'
+                AND job_id IS NOT NULL
+                AND happened_at >= ?
+                AND happened_at < ?
+            """,
+            (since_text, until_text),
+        ).fetchone()[0]
+        messages_sent = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM events
+            WHERE event_type = 'message_sent'
+                AND happened_at >= ?
+                AND happened_at < ?
+            """,
+            (since_text, until_text),
+        ).fetchone()[0]
+        outreach_responses = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM events
+            WHERE event_type = 'coffee_chat'
+                AND happened_at >= ?
+                AND happened_at < ?
+            """,
+            (since_text, until_text),
+        ).fetchone()[0]
+        companies_touched = connection.execute(
+            """
+            SELECT COUNT(DISTINCT company_id)
+            FROM events
+            WHERE event_type NOT IN ('company_added', 'job_added')
+                AND happened_at >= ?
+                AND happened_at < ?
+            """,
+            (since_text, until_text),
+        ).fetchone()[0]
+        actions_completed = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM actions
+            WHERE status = 'done'
+                AND completed_at >= ?
+                AND completed_at < ?
+            """,
+            (since_text, until_text),
+        ).fetchone()[0]
+        average_days = connection.execute(
+            """
+            SELECT AVG(julianday(events.happened_at) - julianday(jobs.created_at))
+            FROM events
+            JOIN jobs ON jobs.id = events.job_id
+            WHERE events.event_type = 'application_submitted'
+                AND events.happened_at >= ?
+                AND events.happened_at < ?
+            """,
+            (since_text, until_text),
+        ).fetchone()[0]
+
+    lane_summary = ", ".join(
+        f"{row['lane']}:{row['count']}" for row in applications_by_lane
+    ) or "none"
+    print(f"Metrics since={since_text} until={until_text}")
+    print(f"jobs_screened={jobs_screened}")
+    print(f"applications_submitted={applications_submitted}")
+    print(f"applications_by_lane={lane_summary}")
+    print(f"ready_to_apply_rate={percent(ready_jobs, jobs_screened)}")
+    print(f"interview_rate={percent(interviews, applications_submitted)}")
+    print(f"rejection_rate={percent(rejections, applications_submitted)}")
+    print(f"outreach_response_rate={percent(outreach_responses, messages_sent)}")
+    print(f"companies_touched={companies_touched}")
+    print(f"actions_completed={actions_completed}")
+    print(
+        "average_days_from_discovery_to_application="
+        + ("0.0" if average_days is None else f"{average_days:.1f}")
+    )
+    return 0
+
+
 def command_action_next(args: argparse.Namespace) -> int:
     db_path = Path(args.db_path)
     require_database(db_path)
@@ -2265,7 +2758,10 @@ def parse_args() -> argparse.Namespace:
     event_list = event_subparsers.add_parser("list", help="List company history events.")
     event_list.add_argument("--company")
     event_list.add_argument("--limit", type=int, default=50)
-    subparsers.add_parser("metrics", help="Show job search metrics.")
+    metrics = subparsers.add_parser("metrics", help="Show job search metrics.")
+    metrics.add_argument("--since")
+    metrics.add_argument("--until")
+    metrics.add_argument("--days", type=int, default=7)
 
     return parser.parse_args()
 
@@ -2357,6 +2853,8 @@ def main() -> int:
                 return command_action_transition(args, "skipped")
             if args.action_command == "reschedule":
                 return command_action_reschedule(args)
+        if args.command == "metrics":
+            return command_metrics(args)
     except ValueError as error:
         print(str(error), file=sys.stderr)
         return 1
