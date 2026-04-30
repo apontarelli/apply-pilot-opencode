@@ -158,6 +158,7 @@ Core commands:
 - `python3 scripts/job_search.py query import --file APPLICATIONS/_ops/query-runs/fintech.json`
 - `python3 scripts/job_search.py query list`
 - `python3 scripts/job_search.py query show <query_run_id>`
+- `python3 scripts/linkedin_mcp_query_handoff.py prepare --pack FINTECH --query-index 1 --search-json APPLICATIONS/_ops/query_runs/linkedin-search.json --details-json APPLICATIONS/_ops/query_runs/linkedin-details.json --output APPLICATIONS/_ops/query-runs/fintech-linkedin.json --import`
 - `python3 scripts/job_search.py job list --company "Company"`
 - `python3 scripts/job_search.py action next`
 - `python3 scripts/job_search.py event list --company "Company"`

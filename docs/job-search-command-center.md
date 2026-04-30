@@ -44,6 +44,7 @@ python3 scripts/job_search.py query show <query_run_id>
 python3 scripts/job_search.py query packs list --default-only
 python3 scripts/job_search.py query packs show FINTECH
 python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --limit 25
+python3 scripts/linkedin_mcp_query_handoff.py prepare --pack FINTECH --query-index 1 --search-json APPLICATIONS/_ops/query_runs/linkedin-search.json --details-json APPLICATIONS/_ops/query_runs/linkedin-details.json --output APPLICATIONS/_ops/query-runs/fintech-linkedin.json --import
 python3 scripts/job_search.py job add --company "Company" --title "Senior Product Manager" --source manual
 python3 scripts/job_search.py job list --company "Company"
 python3 scripts/job_search.py action next --queue apply --limit 5
@@ -204,7 +205,47 @@ Failure classes for `linkedin_mcp` query runs:
 - `detail_validation_failed`: `get_job_details` or the canonical posting contradicts the search result; reject affected rows.
 - `partial_results`: catch-all for interrupted runs with enough normalized rows to review; record as `partial` with the more specific cause in notes.
 
-The follow-up implementation ticket is SID-104. It should wait for SID-101 query-run import support and SID-102 machine-readable query packs.
+SID-104 implements this handoff as a local helper layered over the SID-101
+query-run import support and SID-102 machine-readable query packs.
+
+## LinkedIn MCP Handoff
+
+Use `scripts/linkedin_mcp_query_handoff.py` after Codex has called LinkedIn MCP
+`search_jobs` and `get_job_details`. The helper does not call LinkedIn and does
+not manage auth; it only normalizes saved MCP outputs into the local
+`query import` payload.
+
+Example successful run:
+
+```bash
+python3 scripts/linkedin_mcp_query_handoff.py prepare \
+  --pack FINTECH \
+  --query-index 1 \
+  --search-json APPLICATIONS/_ops/query_runs/linkedin-search.json \
+  --details-json APPLICATIONS/_ops/query_runs/linkedin-details.json \
+  --sort-mode relevance \
+  --output APPLICATIONS/_ops/query-runs/fintech-linkedin.json \
+  --import
+```
+
+Use one payload per pack query. Rows are marked `accepted` only when a matching
+`get_job_details` payload has usable company/title detail; search-only rows are
+rejected with `stale_or_thin_result`.
+
+Example unauthenticated failure path:
+
+```bash
+python3 scripts/linkedin_mcp_query_handoff.py prepare \
+  --pack AI \
+  --query-index 1 \
+  --failure auth_required \
+  --output APPLICATIONS/_ops/query-runs/ai-linkedin-auth-required.json \
+  --import
+```
+
+Raw MCP payloads are not persisted by default. Use `--debug-capture` only for
+local troubleshooting; the helper writes a redacted `0600` file under
+`APPLICATIONS/_ops/query_runs/` and references it from the query run.
 
 ## Query Packs
 
