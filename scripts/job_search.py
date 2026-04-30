@@ -124,6 +124,15 @@ class QueryPack:
         return "default" if self.default_repeatable else "exception"
 
 
+@dataclass(frozen=True)
+class CompanyImportOutcome:
+    row_number: int
+    company_name: str | None
+    company_state: str
+    source_state: str
+    detail: str | None = None
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
@@ -2285,6 +2294,283 @@ def create_company_source(
     return int(cursor.lastrowid)
 
 
+def non_empty_text(record: dict[str, object], *keys: str) -> str | None:
+    for key in keys:
+        value = record.get(key)
+        if value is None:
+            continue
+        if isinstance(value, list):
+            items = [str(item).strip() for item in value if str(item).strip()]
+            if items:
+                return ", ".join(items)
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return None
+
+
+def nested_record(record: dict[str, object], key: str) -> dict[str, object]:
+    value = record.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def company_import_rows(path: Path) -> list[dict[str, object] | object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Invalid company import file {path}: {error.msg}") from error
+
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        for key in ("companies", "targets", "rows"):
+            rows = payload.get(key)
+            if isinstance(rows, list):
+                return rows
+        if any(key in payload for key in ("name", "company", "company_name")):
+            return [payload]
+    raise ValueError(
+        f"Invalid company import file {path}: expected array or object with companies array"
+    )
+
+
+def company_import_tier(record: dict[str, object]) -> int | None:
+    value = record.get("tier")
+    if value is None or value == "":
+        return None
+    try:
+        tier = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("tier must be 1, 2, or 3") from error
+    if tier not in (1, 2, 3):
+        raise ValueError("tier must be 1, 2, or 3")
+    return tier
+
+
+def researched_company_values(record: dict[str, object]) -> tuple[str, dict[str, object]]:
+    name = non_empty_text(record, "name", "company_name", "company")
+    if name is None:
+        raise ValueError("missing company name")
+
+    ats = nested_record(record, "ats")
+    ats_type = non_empty_text(record, "ats_type", "source_type", "provider") or non_empty_text(
+        ats, "type", "provider", "source_type"
+    )
+    values: dict[str, object] = {
+        "tier": company_import_tier(record),
+        "lanes": non_empty_text(record, "lanes", "lane"),
+        "why_interesting": non_empty_text(record, "why_interesting", "why"),
+        "fit_thesis": non_empty_text(record, "fit_thesis", "thesis"),
+        "known_gaps": non_empty_text(record, "known_gaps", "gaps"),
+        "products_used": non_empty_text(record, "products_used"),
+        "target_roles": non_empty_text(record, "target_roles", "target_role"),
+        "career_url": non_empty_text(record, "career_url", "careers_url"),
+        "ats_type": ats_type.casefold() if ats_type else None,
+        "status": non_empty_text(record, "status"),
+        "notes": non_empty_text(record, "notes"),
+    }
+    status = values.get("status")
+    if status is not None and status not in COMPANY_STATUSES:
+        raise ValueError(
+            "status must be one of: " + ", ".join(COMPANY_STATUSES)
+        )
+    return name, {key: value for key, value in values.items() if value not in (None, "")}
+
+
+def upsert_researched_company(
+    connection: sqlite3.Connection,
+    *,
+    name: str,
+    values: dict[str, object],
+    now: str,
+) -> tuple[int, str]:
+    row = connection.execute(
+        "SELECT id FROM companies WHERE name_key = ?",
+        (company_name_key(name),),
+    ).fetchone()
+    if row is None:
+        insert_values = {
+            "name": name,
+            "name_key": company_name_key(name),
+            "status": "active",
+            **values,
+            "created_at": now,
+            "updated_at": now,
+        }
+        columns = ", ".join(insert_values)
+        placeholders = ", ".join("?" for _ in insert_values)
+        cursor = connection.execute(
+            f"INSERT INTO companies({columns}) VALUES ({placeholders})",
+            tuple(insert_values.values()),
+        )
+        company_id = int(cursor.lastrowid)
+        generate_company_actions(connection, company_id=company_id, now=now)
+        log_event(
+            connection,
+            company_id=company_id,
+            event_type="company_added",
+            notes=f"Imported researched company: {name}",
+            now=now,
+        )
+        return company_id, "created"
+
+    company_id = int(row["id"])
+    if values:
+        update_columns(connection, "companies", company_id, values)
+        generate_company_actions(connection, company_id=company_id, now=now)
+        return company_id, "updated"
+    return company_id, "existing"
+
+
+def source_details_for_company_import(
+    record: dict[str, object],
+) -> tuple[str | None, str | None, str | None, str | None]:
+    ats = nested_record(record, "ats")
+    source_type = non_empty_text(record, "ats_type", "source_type", "provider") or non_empty_text(
+        ats, "type", "provider", "source_type"
+    )
+    source_type = source_type.casefold() if source_type else None
+    source_url = non_empty_text(
+        record,
+        "ats_source_url",
+        "source_url",
+        "ats_url",
+    ) or non_empty_text(ats, "source_url", "url")
+    source_key = non_empty_text(
+        record,
+        "ats_source_key",
+        "source_key",
+        "ats_key",
+        "board_token",
+    ) or non_empty_text(ats, "source_key", "key", "board_token")
+    source_notes = non_empty_text(record, "source_notes") or non_empty_text(ats, "notes")
+    if source_key is None and source_url is not None:
+        source_key = normalize_url(source_url) or source_url.strip()
+    return source_type, source_key, source_url, source_notes
+
+
+def upsert_company_source(
+    connection: sqlite3.Connection,
+    *,
+    company_id: int,
+    source_type: str,
+    source_key: str,
+    source_url: str | None,
+    notes: str | None,
+    now: str,
+) -> str:
+    existing = connection.execute(
+        """
+        SELECT *
+        FROM company_sources
+        WHERE company_id = ? AND source_type = ? AND source_key = ?
+        """,
+        (company_id, source_type, source_key),
+    ).fetchone()
+    if existing is None:
+        connection.execute(
+            """
+            INSERT INTO company_sources(
+                company_id, source_type, source_key, source_url, status, notes,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
+            """,
+            (company_id, source_type, source_key, source_url, notes, now, now),
+        )
+        return "source_created"
+
+    values = {
+        key: value
+        for key, value in {"source_url": source_url, "notes": notes}.items()
+        if value is not None and value != existing[key]
+    }
+    if values:
+        update_columns(connection, "company_sources", int(existing["id"]), values)
+        return "source_updated"
+    return "source_existing"
+
+
+def import_researched_company_row(
+    connection: sqlite3.Connection,
+    *,
+    row_number: int,
+    raw_row: object,
+    now: str,
+) -> CompanyImportOutcome:
+    if not isinstance(raw_row, dict):
+        return CompanyImportOutcome(
+            row_number=row_number,
+            company_name=None,
+            company_state="invalid_row",
+            source_state="invalid_row",
+            detail="expected object",
+        )
+
+    try:
+        company_name, company_values = researched_company_values(raw_row)
+    except ValueError as error:
+        return CompanyImportOutcome(
+            row_number=row_number,
+            company_name=non_empty_text(raw_row, "name", "company_name", "company"),
+            company_state="invalid_row",
+            source_state="invalid_row",
+            detail=str(error),
+        )
+
+    company_id, company_state = upsert_researched_company(
+        connection,
+        name=company_name,
+        values=company_values,
+        now=now,
+    )
+    source_type, source_key, source_url, source_notes = source_details_for_company_import(
+        raw_row
+    )
+
+    if not source_type and not source_key and not source_url:
+        source_state = "needs_manual_source"
+        detail = "missing ATS source details"
+    elif source_type not in ATS_TYPES:
+        source_state = "unsupported_ats"
+        detail = f"ats_type={source_type or 'missing'}"
+    elif not source_key:
+        source_state = "needs_manual_source"
+        detail = "missing ATS source key or source URL"
+    else:
+        source_state = upsert_company_source(
+            connection,
+            company_id=company_id,
+            source_type=source_type,
+            source_key=source_key,
+            source_url=source_url,
+            notes=source_notes,
+            now=now,
+        )
+        detail = f"type={source_type} key={source_key}"
+
+    return CompanyImportOutcome(
+        row_number=row_number,
+        company_name=company_name,
+        company_state=f"company_{company_state}",
+        source_state=source_state,
+        detail=detail,
+    )
+
+
+def format_company_import_outcome(outcome: CompanyImportOutcome) -> str:
+    parts = [
+        f"row={outcome.row_number}",
+        f"company={outcome.company_name or 'unknown'}",
+        outcome.company_state,
+        outcome.source_state,
+    ]
+    if outcome.detail:
+        parts.append(outcome.detail)
+    return " | ".join(parts)
+
+
 def update_columns(
     connection: sqlite3.Connection,
     table: str,
@@ -2545,6 +2831,36 @@ def command_company_list(args: argparse.Namespace) -> int:
         print_company_row(row)
     if not rows:
         print("no companies")
+    return 0
+
+
+def command_company_import(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    import_path = Path(args.file)
+    require_database(db_path)
+    rows = company_import_rows(import_path)
+    now = utc_now()
+    outcomes: list[CompanyImportOutcome] = []
+    with closing(connect(db_path)) as connection:
+        with connection:
+            for row_number, raw_row in enumerate(rows, start=1):
+                outcomes.append(
+                    import_researched_company_row(
+                        connection,
+                        row_number=row_number,
+                        raw_row=raw_row,
+                        now=now,
+                    )
+                )
+
+    counts: dict[str, int] = {}
+    for outcome in outcomes:
+        counts[outcome.company_state] = counts.get(outcome.company_state, 0) + 1
+        counts[outcome.source_state] = counts.get(outcome.source_state, 0) + 1
+        print(format_company_import_outcome(outcome))
+
+    summary = " ".join(f"{key}={counts[key]}" for key in sorted(counts))
+    print(f"company import rows={len(outcomes)} {summary}".rstrip())
     return 0
 
 
@@ -4281,6 +4597,14 @@ def parse_args() -> argparse.Namespace:
     company_list = company_subparsers.add_parser("list", help="List companies.")
     company_list.add_argument("--status", choices=COMPANY_STATUSES)
     company_list.add_argument("--tier", type=int, choices=(1, 2, 3))
+    company_import = company_subparsers.add_parser(
+        "import", help="Import researched companies and ATS source details."
+    )
+    company_import.add_argument(
+        "--file",
+        required=True,
+        help="Researched-company JSON file.",
+    )
 
     source = subparsers.add_parser("source", help="Manage target-company ATS sources.")
     source_subparsers = source.add_subparsers(
@@ -4630,6 +4954,8 @@ def main() -> int:
                 return command_company_show(args)
             if args.company_command == "list":
                 return command_company_list(args)
+            if args.company_command == "import":
+                return command_company_import(args)
         if args.command == "source":
             if args.source_command == "add":
                 return command_source_add(args)

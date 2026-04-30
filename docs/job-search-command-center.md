@@ -32,6 +32,7 @@ The command center tracks:
 python3 scripts/job_search.py init
 python3 scripts/job_search.py status
 python3 scripts/job_search.py company add "Company"
+python3 scripts/job_search.py company import --file APPLICATIONS/_ops/researched-companies/fintech-targets.json
 python3 scripts/job_search.py company show "Company"
 python3 scripts/job_search.py company list
 python3 scripts/job_search.py source add "Company" --type greenhouse --key <board-token>
@@ -89,11 +90,45 @@ python3 scripts/job_search.py event list --company "Company"
 
 Configured target-company polling is source-first.
 
+- Default discovery workflow: research target companies externally, import the
+  researched-company JSON, review configured ATS sources, then run `poll`.
+- Use `company import --file <path>` for Codex/ChatGPT research output that
+  includes company thesis, target roles, career URL, and ATS source details.
 - Add explicit ATS sources with `source add`.
 - Poll configured active sources with `poll`.
 - Prefer Greenhouse, Lever, and Ashby APIs before official career-page browsing.
 - Use official company career pages as manual/browser fallback when no ATS source is configured.
 - Workday support should wait until a target company justifies it.
+
+Researched-company import accepts either a JSON array or an object with a
+`companies` array. Each row should use a small, reviewable shape:
+
+```json
+{
+  "name": "ExampleCo",
+  "tier": 1,
+  "lanes": ["FINTECH", "AI"],
+  "why_interesting": "Why this company belongs on the target list.",
+  "fit_thesis": "Why Antonio's proof maps to the company.",
+  "target_roles": ["Senior Product Manager", "Product Lead"],
+  "career_url": "https://example.com/careers",
+  "ats_type": "greenhouse",
+  "ats_source_key": "exampleco",
+  "notes": "Research notes worth preserving."
+}
+```
+
+Import behavior:
+
+- Upserts companies by normalized `name_key`; missing fields never wipe existing
+  values.
+- Upserts `company_sources` for supported `greenhouse`, `lever`, and `ashby`
+  sources using the existing `(company_id, source_type, source_key)` uniqueness.
+- Reports each row as `company_created`, `company_updated`, or
+  `company_existing`, plus source outcomes such as `source_created`,
+  `source_updated`, `source_existing`, `needs_manual_source`,
+  `unsupported_ats`, or `invalid_row`.
+- Does not create jobs. Run `poll` explicitly after review.
 
 Polling behavior:
 
@@ -111,6 +146,10 @@ Duplicate rules:
 ## Broad Job-Board Query Strategy
 
 SID-100 chose a hybrid strategy: source-gated query packs.
+
+Broad job-board APIs are secondary/backlog. Do not make SerpApi, JSearch,
+DataForSEO, Adzuna, or another broad API the default discovery backbone unless a
+future ticket explicitly changes that posture.
 
 Use two repeatable discovery motions:
 

@@ -651,6 +651,289 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertIn("default_repeatable=false", result.stdout)
             self.assertIn("product manager access reviews", result.stdout)
 
+    def test_company_import_adds_multiple_researched_companies_and_sources(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            payload_path = Path(tmpdir) / "companies.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "companies": [
+                            {
+                                "name": "Ramp",
+                                "tier": 1,
+                                "lanes": ["FINTECH", "AI"],
+                                "why_interesting": "Finance automation.",
+                                "fit_thesis": "Strong platform fit.",
+                                "target_roles": ["Senior Product Manager"],
+                                "career_url": "https://ramp.com/careers",
+                                "ats_type": "greenhouse",
+                                "ats_source_key": "ramp",
+                                "notes": "Tier 1 target.",
+                            },
+                            {
+                                "company_name": "Mercury",
+                                "tier": "2",
+                                "lane": "FINTECH",
+                                "target_role": "Product Manager",
+                                "ats": {
+                                    "type": "lever",
+                                    "key": "mercury",
+                                    "url": "https://api.lever.co/v0/postings/mercury?mode=json",
+                                },
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.run_cli(db_path, "init")
+            result = self.run_cli(
+                db_path, "company", "import", "--file", str(payload_path)
+            )
+
+            self.assertIn("row=1 | company=Ramp | company_created | source_created", result.stdout)
+            self.assertIn("row=2 | company=Mercury | company_created | source_created", result.stdout)
+            self.assertIn("company_created=2", result.stdout)
+            self.assertIn("source_created=2", result.stdout)
+
+            with closing(self.connect(db_path)) as connection:
+                companies = connection.execute(
+                    """
+                    SELECT name, tier, lanes, target_roles, ats_type
+                    FROM companies
+                    ORDER BY name_key
+                    """
+                ).fetchall()
+                sources = connection.execute(
+                    """
+                    SELECT companies.name, source_type, source_key, source_url
+                    FROM company_sources
+                    JOIN companies ON companies.id = company_sources.company_id
+                    ORDER BY companies.name_key
+                    """
+                ).fetchall()
+
+            self.assertEqual(
+                companies,
+                [
+                    ("Mercury", 2, "FINTECH", "Product Manager", "lever"),
+                    ("Ramp", 1, "FINTECH, AI", "Senior Product Manager", "greenhouse"),
+                ],
+            )
+            self.assertEqual(
+                sources,
+                [
+                    (
+                        "Mercury",
+                        "lever",
+                        "mercury",
+                        "https://api.lever.co/v0/postings/mercury?mode=json",
+                    ),
+                    ("Ramp", "greenhouse", "ramp", None),
+                ],
+            )
+
+    def test_company_import_rerun_is_idempotent_for_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            payload_path = Path(tmpdir) / "companies.json"
+            payload_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "Ashby Co",
+                            "ats_type": "ashby",
+                            "ats_source_key": "ashby-co",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            self.run_cli(db_path, "init")
+            first = self.run_cli(
+                db_path, "company", "import", "--file", str(payload_path)
+            )
+            second = self.run_cli(
+                db_path, "company", "import", "--file", str(payload_path)
+            )
+
+            self.assertIn("company_created", first.stdout)
+            self.assertIn("source_created", first.stdout)
+            self.assertIn("company_updated", second.stdout)
+            self.assertIn("source_existing", second.stdout)
+
+            with closing(self.connect(db_path)) as connection:
+                company_count = connection.execute(
+                    "SELECT COUNT(*) FROM companies"
+                ).fetchone()[0]
+                source_count = connection.execute(
+                    "SELECT COUNT(*) FROM company_sources"
+                ).fetchone()[0]
+
+            self.assertEqual(company_count, 1)
+            self.assertEqual(source_count, 1)
+
+    def test_company_import_missing_source_details_needs_manual_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            payload_path = Path(tmpdir) / "companies.json"
+            payload_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "Plaid",
+                            "tier": 1,
+                            "lanes": "FINTECH",
+                            "why_interesting": "Financial data platform.",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            self.run_cli(db_path, "init")
+            result = self.run_cli(
+                db_path, "company", "import", "--file", str(payload_path)
+            )
+
+            self.assertIn("company_created", result.stdout)
+            self.assertIn("needs_manual_source", result.stdout)
+            with closing(self.connect(db_path)) as connection:
+                source_count = connection.execute(
+                    "SELECT COUNT(*) FROM company_sources"
+                ).fetchone()[0]
+            self.assertEqual(source_count, 0)
+
+    def test_company_import_unsupported_ats_does_not_mutate_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            payload_path = Path(tmpdir) / "companies.json"
+            payload_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "Workday Co",
+                            "ats_type": "workday",
+                            "ats_source_key": "workday-co",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            self.run_cli(db_path, "init")
+            result = self.run_cli(
+                db_path, "company", "import", "--file", str(payload_path)
+            )
+
+            self.assertIn("unsupported_ats", result.stdout)
+            self.assertIn("ats_type=workday", result.stdout)
+            with closing(self.connect(db_path)) as connection:
+                source_count = connection.execute(
+                    "SELECT COUNT(*) FROM company_sources"
+                ).fetchone()[0]
+            self.assertEqual(source_count, 0)
+
+    def test_company_import_continues_after_invalid_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            payload_path = Path(tmpdir) / "companies.json"
+            payload_path.write_text(
+                json.dumps(
+                    [
+                        {"tier": 1, "ats_type": "greenhouse", "ats_source_key": "missing"},
+                        "not an object",
+                        {
+                            "name": "Valid Co",
+                            "ats_type": "greenhouse",
+                            "ats_source_key": "valid-co",
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            self.run_cli(db_path, "init")
+            result = self.run_cli(
+                db_path, "company", "import", "--file", str(payload_path)
+            )
+
+            self.assertIn("row=1 | company=unknown | invalid_row | invalid_row", result.stdout)
+            self.assertIn("row=2 | company=unknown | invalid_row | invalid_row", result.stdout)
+            self.assertIn("row=3 | company=Valid Co | company_created | source_created", result.stdout)
+            with closing(self.connect(db_path)) as connection:
+                companies = connection.execute("SELECT name FROM companies").fetchall()
+                sources = connection.execute(
+                    "SELECT source_type, source_key FROM company_sources"
+                ).fetchall()
+
+            self.assertEqual(companies, [("Valid Co",)])
+            self.assertEqual(sources, [("greenhouse", "valid-co")])
+
+    def test_company_import_preserves_absent_existing_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            payload_path = Path(tmpdir) / "companies.json"
+            payload_path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "Stripe",
+                            "fit_thesis": "Updated thesis.",
+                            "ats_type": "greenhouse",
+                            "ats_source_key": "stripe",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            self.run_cli(db_path, "init")
+            self.run_cli(
+                db_path,
+                "company",
+                "add",
+                "Stripe",
+                "--tier",
+                "1",
+                "--lanes",
+                "FINTECH",
+                "--why-interesting",
+                "Existing why.",
+                "--target-roles",
+                "Product Manager",
+            )
+            result = self.run_cli(
+                db_path, "company", "import", "--file", str(payload_path)
+            )
+
+            self.assertIn("company_updated", result.stdout)
+            with closing(self.connect(db_path)) as connection:
+                company = connection.execute(
+                    """
+                    SELECT tier, lanes, why_interesting, fit_thesis, target_roles
+                    FROM companies
+                    WHERE name_key = ?
+                    """,
+                    ("stripe",),
+                ).fetchone()
+
+            self.assertEqual(
+                tuple(company),
+                (
+                    1,
+                    "FINTECH",
+                    "Existing why.",
+                    "Updated thesis.",
+                    "Product Manager",
+                ),
+            )
+
     def test_query_run_rejects_exception_pack_without_reason(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "job_search.sqlite"

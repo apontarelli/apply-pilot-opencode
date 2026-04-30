@@ -30,16 +30,30 @@ Read base resumes only when lane fit is unclear:
 Read `references/query-packs.md` before running multi-query discovery.
 
 Use the registry-backed CLI before broad discovery:
+- `python3 scripts/job_search.py company import --file APPLICATIONS/_ops/researched-companies/fintech-targets.json`
+- `python3 scripts/job_search.py source list --status active`
+- `python3 scripts/job_search.py poll`
 - `python3 scripts/job_search.py query packs list --default-only`
 - `python3 scripts/job_search.py query packs show FINTECH`
 - `python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --limit 25`
 - `python3 scripts/job_search.py query run --source manual_browser --pack ACCESS --reason "specific access/trust target role"`
+
+Default discovery backbone:
+1. Research target companies externally with Codex/ChatGPT or manual browsing.
+2. Import the reviewed company JSON with `company import`.
+3. Review configured Greenhouse, Lever, or Ashby sources with `source list`.
+4. Run `poll` against configured sources.
+
+Broad job-board APIs and broad source adapters are secondary/backlog. Do not
+make SerpApi, JSearch, DataForSEO, Adzuna, or another broad API the default
+discovery path.
 
 Exception packs such as `ACCESS`, `PAYMENTS_INSURANCE_CRYPTO_TRUST`, and `INDUSTRIAL_AUTONOMY_BRIDGE` require `--reason` on broad query runs. Do not treat them as default lanes.
 
 Use `scripts/job_search.py` as the cross-session command center:
 - `python3 scripts/job_search.py init` if `status` says the database is not initialized
 - `python3 scripts/job_search.py status`
+- `python3 scripts/job_search.py company import --file <researched-companies.json>`
 - `python3 scripts/job_search.py company show "Company"`
 - `python3 scripts/job_search.py job list --company "Company"`
 - `python3 scripts/job_search.py action next`
@@ -60,9 +74,10 @@ For target-company work, use the same command center rather than a separate list
 ## Lane Priority
 
 Default search motion:
-1. `FINTECH` / `PLATFORM`
-2. `AI` / `WORKFLOW`
-3. `INDUSTRIAL` / `AUTONOMY` only when the user explicitly wants exploratory bridge roles
+1. Source-first target-company research, import, and ATS polling.
+2. `FINTECH` / `PLATFORM`
+3. `AI` / `WORKFLOW`
+4. `INDUSTRIAL` / `AUTONOMY` only when the user explicitly wants exploratory bridge roles
 
 Primary lane:
 - `FINTECH` / `PLATFORM`
@@ -131,7 +146,7 @@ If the LinkedIn MCP is unavailable or not authenticated, say so directly and ask
 
 `search_jobs` is noisy. Do not trust one broad query.
 
-Default search order:
+Default broad-query order, after source-first target-company polling:
 1. Start with `2-4` narrow queries from `references/query-packs.md`.
 2. Prefer title + problem-domain combinations over generic title-only searches.
 3. Broaden from exact domain to adjacent workflow, not from exact domain to generic `platform` alone.
