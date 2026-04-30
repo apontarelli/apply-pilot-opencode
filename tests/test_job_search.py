@@ -1743,6 +1743,8 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 "#3 | apply:apply | queued | due=unscheduled | Coinbase / Senior Product Manager",
                 next_apply.stdout,
             )
+            self.assertIn("job=#1", next_apply.stdout)
+            self.assertIn("url=https://example.com/coinbase-spm", next_apply.stdout)
             self.assertIn("Company: Coinbase", company_show.stdout)
             self.assertIn(
                 "Summary: tier=1 | status=active | lanes=fintech",

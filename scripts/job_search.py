@@ -2335,10 +2335,19 @@ def format_action(row: sqlite3.Row) -> str:
     subject = row["company_name"]
     if row["job_title"]:
         subject += f" / {row['job_title']}"
-    return (
+    if row["job_id"]:
+        subject += f" | job=#{row['job_id']}"
+    parts = [
         f"#{row['id']} | {row['queue']}:{row['kind']} | {row['status']} | "
         f"due={due} | {subject}"
-    )
+    ]
+    if row["job_url"]:
+        parts.append(f"url={row['job_url']}")
+    if row["job_resume"]:
+        parts.append(f"resume={row['job_resume']}")
+    if row["job_application_folder"]:
+        parts.append(f"materials={row['job_application_folder']}")
+    return " | ".join(parts)
 
 
 def action_rows_query(where_sql: str = "") -> str:
@@ -2346,7 +2355,10 @@ def action_rows_query(where_sql: str = "") -> str:
         SELECT
             actions.*,
             companies.name AS company_name,
-            jobs.title AS job_title
+            jobs.title AS job_title,
+            jobs.canonical_url AS job_url,
+            jobs.recommended_resume AS job_resume,
+            jobs.application_folder AS job_application_folder
         FROM actions
         JOIN companies ON companies.id = actions.company_id
         LEFT JOIN jobs ON jobs.id = actions.job_id
