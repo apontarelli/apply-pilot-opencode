@@ -22,6 +22,133 @@ Bridge thesis:
 
 ---
 
+## STRATEGY-AWARE SCREENING
+
+Separate these questions before deciding whether to apply:
+
+1. Do we like this?
+   - company quality
+   - product space
+   - long-term direction
+   - compensation
+   - brand value
+2. Can Antonio credibly win this now?
+   - formal PM years
+   - seniority band
+   - recruiter-screen risk
+   - direct domain proof
+   - shipped scope
+   - title truth
+3. If not now, is it worth building toward?
+   - referral or recruiter path
+   - hiring-manager path
+   - portfolio artifact
+   - resume variant
+   - side project
+   - target-company monitoring
+
+Default rule:
+- `win_now_fit` outranks `company_pull` for apply-now decisions
+- loved-company stretch roles become campaigns unless the specific JD clears the recruiter screen
+- do not let domain fit or company excitement hide a formal level, title, PM-years, or direct-proof gap
+
+---
+
+## QUEUE BUCKETS
+
+| Bucket | Meaning | Action |
+| --- | --- | --- |
+| `ready_to_apply` | Strong fit, no major truth gap | Apply now; customize only when signal is high |
+| `low_effort_apply` | Good enough, no fake story, not worth customization | Base resume only; counts toward daily volume |
+| `stretch_warm_path` | Loved or strategic company, but cold odds are weak | Find referral, recruiter, HM, or better-fit role |
+| `portfolio_gap` | Great target, missing reusable proof | Build artifact, demo, teardown, case study, or resume proof |
+| `watch` | Good company, no clean role or action yet | Monitor roles and revisit on trigger |
+| `pass` | Requires fake story, weak interest, weak comp, or bad screen risk | Skip |
+
+Use `stretch_warm_path` only when there is a concrete next action:
+- named recruiter or likely hiring manager
+- referral path
+- better adjacent role to monitor
+- targeted artifact idea
+- specific company research action
+
+If there is no concrete next action, mark the role `pass` and keep the company on `watch` only when the company still matters.
+
+---
+
+## EXPERIENCE TRUTH / HARD SCREENS
+
+Current truth:
+- almost 4 years formal PM experience
+- 10+ years production finance / operator depth
+- current title: Senior Product Manager
+- staff-like scope through cross-org systems, standards, and business-critical outcomes
+- no staff, principal, group, or director title claim
+
+Strong screen signals:
+- senior IC PM roles around 3-5 years PM experience
+- roles that value operational depth, high-trust systems, and cross-functional product ownership
+- roles where staff-like scope can be shown through outcomes rather than title inflation
+
+Hard-screen risk:
+- 7-8+ years formal PM required as a strict filter
+- staff/principal/group/director title treated as literal prior-title requirement
+- people-management-first product leadership
+- deep domain-native proof required as the main credibility screen
+- shipped AI-native adoption metrics required as the central proof
+- direct payments rail, API/devtools, autonomy, robotics, industrial, or trading-core expertise required without a bridge
+
+Default:
+- do not cold-apply to a hard-screen role just because the company is exciting
+- route it to `stretch_warm_path`, `portfolio_gap`, `watch`, or `pass`
+
+---
+
+## LOVED COMPANIES / CAMPAIGNS
+
+Some companies can be worth campaign work even when a specific JD is not a clean apply-now fit.
+
+Current stretch-company examples:
+- Stripe
+- Mercury
+
+For these companies:
+- find roles closer to 3-5 years PM or senior IC scope
+- identify recruiter, PM leader, alumni, or second-degree paths
+- build artifacts that map to their product problems
+- apply only when the form does not hard-block or there is a warm path
+- avoid treating every interesting JD as part of the application quota
+
+Campaign tiers:
+- `tier 1`: active campaign; eligible for daily company-campaign actions
+- `tier 2`: monitor; occasional research, no daily pressure
+- `tier 3`: passive watch only
+
+---
+
+## PROOF GAPS
+
+Current gaps to track without overstating:
+- direct payments rail depth
+- API / devtools product ownership
+- 7-8 years formal PM
+- AI-native shipped adoption
+- industrial / autonomy / robotics domain proof
+- crypto trading-core or protocol-native expertise
+
+Gap actions:
+- outreach
+- portfolio projects
+- product teardowns
+- demos
+- resume variants
+- targeted artifacts
+- networking
+
+Large proof artifacts belong in the repo or Linear project that owns the artifact. The job-search command center should only track why the proof matters and link out when the work becomes a real side-project task.
+
+---
+
 ## TARGET LANES
 
 ### 1. FINTECH / PLATFORM PM

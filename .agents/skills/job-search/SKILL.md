@@ -11,6 +11,7 @@ Use this skill for LinkedIn-backed discovery, validation, and JD intake before a
 
 1. Find roles aligned to current lanes:
    - `FINTECH`
+   - `ACCESS`
    - `AI`
 2. Filter out low-signal roles quickly.
 3. Turn LinkedIn job posts into normalized JD text.
@@ -25,6 +26,7 @@ Use this skill for LinkedIn-backed discovery, validation, and JD intake before a
 
 Read base resumes only when lane fit is unclear:
 - `YOUR_PROFILE/Fintech/FINTECH.md`
+- `YOUR_PROFILE/Access/ACCESS.md`
 - `YOUR_PROFILE/AI/AI.md`
 
 Read `references/query-packs.md` before running multi-query discovery.
@@ -110,6 +112,10 @@ Always score each role on:
 - `Interest`: high / medium / low
 - `Comp`: strong / unclear / weak
 - `Geo`: good / caution / weak
+- `Win-now fit`: strong / plausible / weak
+- `Screen risk`: low / medium / high
+- `Bucket`: `ready_to_apply` / `low_effort_apply` / `stretch_warm_path` / `portfolio_gap` / `watch` / `pass`
+- `Next action`: exact apply, campaign, proof-gap, watch, or pass action
 
 Default behavior:
 - high interest + acceptable risk can become `ready_to_apply`
@@ -121,6 +127,45 @@ Default behavior:
 - `230k+` base is strong comp support
 - clearly weak disclosed comp should block `ready_to_apply`
 - missing comp should not block on its own
+
+## Strategy-Aware Triage
+
+Separate three questions before recommending a role:
+1. Do we like it?
+2. Can Antonio credibly win it now?
+3. If not now, is it worth building toward?
+
+`win_now_fit` outranks `company_pull` for apply-now decisions.
+
+Do not let company excitement, domain fit, or long-term interest hide:
+- formal PM-years gaps
+- staff/principal/group/director title filters
+- people-management-first expectations
+- direct domain-proof requirements
+- shipped AI-native adoption requirements
+- payments rail, API/devtools, crypto trading-core, robotics, industrial, or autonomy expertise that is being used as a hard screen
+
+Bucket rules:
+- `ready_to_apply`: strong fit, no major truth gap; continue to `$job-apply`
+- `low_effort_apply`: good enough, no fake story, base resume only; counts toward volume
+- `stretch_warm_path`: loved or strategic company, but cold odds are weak; create a concrete company-campaign action
+- `portfolio_gap`: strong target pattern, but missing reusable proof; create or reference a proof-gap action
+- `watch`: good company or space, no clean role or immediate action; record watch condition
+- `pass`: fake story, weak interest, weak comp, or high screen risk with no concrete campaign path
+
+Use `stretch_warm_path` only when there is a concrete next action:
+- find a recruiter, likely hiring manager, referral, or better-fit role
+- draft or prepare approved outreach
+- research a specific company angle
+- define a targeted artifact
+
+If there is no concrete next action, pass on the role and use company `watch` only when the company still matters.
+
+For Stripe, Mercury, and similar loved stretch companies:
+- treat hard-screen roles as target-company campaign inputs, not default application queue items
+- search for roles closer to 3-5 years PM or senior IC scope
+- apply only when the form does not hard-block or there is a warm path
+- avoid counting campaign work as application volume
 
 ## Tooling
 
@@ -206,13 +251,16 @@ The skill should not stop at a shortlist if the user asked for end-to-end vettin
 5. Produce a compact decision:
    - likely lane
    - interest level
+   - win-now fit
+   - screen risk
+   - bucket
    - comp signal when available
    - comp read against the `180k / 205k-225k / 230k+` bands when disclosed
    - why it fits
    - biggest mismatch or risk
-   - whether to pass, low-priority apply, or strong-fit apply
+   - exact next action
 6. If the user asked for search-only, stop at the shortlist and record the decision.
-7. If the user asked for search + vetting, continue directly into `$job-apply` for each surviving role.
+7. If the user asked for search + vetting, continue directly into `$job-apply` only for `ready_to_apply` and `low_effort_apply` roles.
 8. Normalize the role into a reusable packet for `$job-apply`:
    - company
    - role title
@@ -244,6 +292,9 @@ For search results, return a short ranked list with:
 - role
 - lane
 - interest level
+- win-now fit
+- screen risk
+- bucket
 - quick reason
 - risk or mismatch
 
@@ -271,10 +322,12 @@ Before recommending or screening a role, check whether it is already in the comm
 When validating a specific role, answer:
 - Is this lane-aligned?
 - Is this actually interesting enough to pursue?
+- Can Antonio credibly win this now?
+- Is there a formal recruiter-screen risk?
 - Is compensation disclosed, and if so does it clear the current comp bands?
 - Is it truthful with current proof?
 - Does it look high-signal, medium-signal, or low-signal?
-- Is `$job-apply` the next step, or should the user pass?
+- Is `$job-apply` the next step, or should this become campaign, proof-gap, watch, or pass work?
 
 Pass quickly when:
 - the role needs a fake story
@@ -300,6 +353,8 @@ Minimum fields:
 - `recommended_resume`
 - `canonical_url`
 - `application_folder` or material paths when saved
+- bucket, `win_now_fit`, `screen_risk`, and `next_action` in notes when no first-class field exists
+- optional `external_ref` or `linear_url` in notes when a proof gap has been promoted to Linear
 
 Use:
 - `ignored_by_filter` for passes
@@ -307,6 +362,14 @@ Use:
 - `ready_to_apply` when the role should be handed off to Antonio
 - `applied` when Antonio confirms submission
 - `rejected`, `closed`, or `archived` when the outcome is known
+
+Action conventions:
+- company campaign: `find_better_role`, `find_contact`, `draft_outreach`, `follow_up`, `company_research`
+- proof gap: `build_artifact`, `product_teardown`, `portfolio_case_study`, `demo`, `resume_gap`, `gap_research`
+- market signal: `ship_note`, `build_log`, `problem_teardown`, `artifact_release`, `lesson_learned`, `conversation`
+- watch: `monitor_company`, `monitor_role`, `revisit_later`, `poll_source`
+
+Do not add new SQLite schema for these fields until repeated usage proves it is needed.
 
 ## Target Company Research
 
@@ -362,25 +425,28 @@ Common writes:
 
 ## Handoff To `$job-apply`
 
-When a role is worth pursuing, end with a handoff block that `$job-apply` can use immediately:
+When screening a role, end with a handoff or routing block:
 
-- `Lane`: `FINTECH` / `AI` / `PASS`
-- `Recommendation`: apply / low-priority apply / pass
+- `Lane`: `FINTECH` / `ACCESS` / `AI` / `PASS`
+- `Recommendation`: `ready_to_apply` / `low_effort_apply` / `stretch_warm_path` / `portfolio_gap` / `watch` / `pass`
 - `Company`: ...
 - `Role`: ...
 - `Location`: ...
 - `Link`: canonical job URL
 - `Interest`: high / medium / low
+- `Win-now fit`: strong / plausible / weak
+- `Screen risk`: low / medium / high
 - `Comp`: strong / unclear / weak
 - `Resume`: exact base resume to use
 - `Why now`: 1-2 lines
 - `Risks`: 1-2 lines
+- `Next action`: exact apply, campaign, proof-gap, watch, or pass action
 - `App Materials`: any saved JD / QA / cover letter files to review before applying, or `none yet`
 - `JD Text`: normalized text
 
 Exploratory industrial or autonomy roles should usually still hand off as `FINTECH` when the bridge story is truthful, otherwise `PASS`.
 
-If the user asked for automated vetting, continue into `$job-apply` immediately instead of asking for a second command.
+If the user asked for automated vetting, continue into `$job-apply` without asking for a second command only when the bucket is `ready_to_apply` or `low_effort_apply`.
 
 For `ready_to_apply` roles, always show:
 - the job link
@@ -390,6 +456,13 @@ For `ready_to_apply` roles, always show:
 ## Saving Work
 
 For `ready_to_apply` roles, save under `APPLICATIONS/READY_TO_APPLY/<Company>_<Role>/`.
+
+Maintain `APPLICATIONS/READY_TO_APPLY/INDEX.md` as the human click-through queue:
+- every `ready_to_apply` role must appear there
+- the job title must be a Markdown link to the canonical job URL
+- include the exact resume lane and a link to the saved role folder, `JD.md`, `QA.md`, or `SEARCH.md`
+- keep high-interest and urgent roles at the top
+- when a role becomes `applied`, `closed`, `ignored_by_filter`, or otherwise terminal, move it out of the active apply section
 
 For `watch` roles, save only when the user asks or the role is unusually strong but deferred.
 

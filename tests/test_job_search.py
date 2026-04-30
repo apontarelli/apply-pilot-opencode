@@ -2633,7 +2633,15 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 "85",
             )
             self.run_cli(db_path, "action", "done", "1")
-            self.run_cli(db_path, "job", "status", "1", "ready_to_apply")
+            self.run_cli(
+                db_path,
+                "job",
+                "status",
+                "1",
+                "ready_to_apply",
+                "--happened-at",
+                "2026-04-22T12:00:00+00:00",
+            )
             self.run_cli(
                 db_path,
                 "job",

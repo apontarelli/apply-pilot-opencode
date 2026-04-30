@@ -40,6 +40,136 @@ Current build order:
 
 ---
 
+## OPERATING QUEUES
+
+Daily job-search execution has five separate queues. Do not mix application volume with campaign, proof, or market-signal work.
+
+### Application Queue
+
+Purpose:
+- keep pipeline volume alive
+
+Counts:
+- `ready_to_apply`
+- `low_effort_apply`
+
+Cadence:
+- `5` applications per weekday
+
+Done means:
+- submitted application, or a role is ready for Antonio to submit with exact link, resume, and required materials
+
+Owner system:
+- SQLite command center
+- saved role materials under `APPLICATIONS/READY_TO_APPLY/` when needed
+
+### Company Campaign Queue
+
+Purpose:
+- improve access to loved or stretch companies
+
+Cadence:
+- `1` company campaign action per weekday
+- cap routine work at `20-30` minutes unless explicitly promoted to a project
+
+Task kinds:
+- `find_better_role`
+- `find_contact`
+- `draft_outreach`
+- `send_outreach` only after Antonio approves
+- `follow_up`
+- `company_research`
+
+Done means:
+- concrete role lead, contact, outreach draft, sent outreach, follow-up, or company-specific research note
+
+Owner system:
+- SQLite command-center actions
+- Linear only when the task becomes system-improvement work
+
+### Proof Gap Queue
+
+Purpose:
+- close reusable credibility gaps across several companies or lanes
+
+Cadence:
+- `1` proof-gap block per week
+
+Task kinds:
+- `build_artifact`
+- `product_teardown`
+- `portfolio_case_study`
+- `demo`
+- `resume_gap`
+- `gap_research`
+
+Done means:
+- a reusable artifact, brief, demo, case study, resume proof point, or scoped follow-up ticket exists
+
+Owner system:
+- SQLite command-center actions for local tracking
+- separate Side Projects Linear project when the artifact becomes real build work
+- use action notes for optional `external_ref` or `linear_url`
+
+### Market Signal Queue
+
+Purpose:
+- turn Hard Sets and related work into credible public proof
+
+Cadence:
+- `1` market-signal action per week
+- start as guidance plus optional action kind; do not make this a first-class SQLite queue yet
+
+Channels:
+- LinkedIn: career signal for product craft, AI workflow, operator UX, trust, and systems thinking
+- X: founder/product signal for building in public, app progress, product taste, experiments, and light promotion
+
+Task kinds:
+- `ship_note`
+- `build_log`
+- `problem_teardown`
+- `artifact_release`
+- `lesson_learned`
+- `conversation`
+
+Done means:
+- draft, published post, released artifact, useful reply/comment, or reusable content note
+
+Claim-strength rule:
+- LinkedIn should be mostly shipped or demoable proof
+- X can include shipped work, in-progress work, opinions, experiments, and promotion
+
+### Watch Queue
+
+Purpose:
+- monitor companies or roles without turning them into active work
+
+Task kinds:
+- `monitor_company`
+- `monitor_role`
+- `revisit_later`
+- `poll_source`
+
+Done means:
+- watch condition is recorded, checked, or converted into application/campaign/proof work
+
+Owner system:
+- SQLite company status, job status, events, and actions
+
+### Linear Boundary
+
+Use Linear for:
+- system improvements to this repo
+- larger proof/build artifacts under the Side Projects team
+
+Do not use Linear for:
+- daily application execution
+- routine contact search
+- small follow-ups
+- normal watch-list maintenance
+
+---
+
 ## LIVE APPLICATION RULES
 
 When a live application comes in:
@@ -89,6 +219,7 @@ Low-effort apply rule:
 - reserve company `watch` status or action notes for roles not worth immediate submission
 - record `low_effort_apply` in job or action notes when the right move is: existing resume, no custom cover letter, and only minimal QA if the form forces text fields
 - default low-effort apply shape: medium-or-better interest, geo good enough, comp not clearly weak, and no fake story required
+- `low_effort_apply` counts toward the daily and weekly application target
 
 ### LinkedIn MCP intake
 
