@@ -1,204 +1,239 @@
-# Job Application Automation System
+# Job Search Command Center
 
 ![OpenCode for Job Applications](assets/cc-for-job-applications.png)
 
-**Not a prompt. A system.**
+**Not a prompt. A job-search operating system.**
 
-An 8-agent AI system that transforms job descriptions into complete, tailored application packages. Built with OpenCode.
+This repo helps Antonio discover, screen, track, and apply to high-signal roles without turning LinkedIn, scattered notes, or resume polishing into the source of truth.
+
+It combines:
+
+- a company-first SQLite command center
+- repo-scoped `$job-search` and `$job-apply` skills
+- reusable resume lanes for FINTECH, AI, and DESIGN
+- a legacy `/apply` package generator for full tailored application materials
+
 Forked and maintained by Antonio Pontarelli from the original by Shashikiran Devadiga.
 
----
+## Source Of Truth
+
+- [Product Strategy](docs/PRODUCT_STRATEGY.md): what the product does, the problem it solves, milestones, success metrics, source-of-truth map
+- [Command Center](docs/job-search-command-center.md): implemented operating model, daily workflow, CLI commands, query strategy, LinkedIn handoff rules
+- [Docs Router](docs/README.md): durable docs map
 
 ## What It Does
 
-Drop in a job description → Get application-ready materials:
+The command center tracks durable job-search state:
 
-- **Strategic JD Assessment** with fit scoring and gap analysis
-- **Tailored Resume** (bullets per your distribution, each 240-260 chars, 6-point framework)
-- **Cover Letter** (proof-first short note, target 100-140 words)
-- **Outreach Strategy** (multi-track with 3-tier escalation)
-- **Ready-to-Send DOCX** files
+- companies
+- company sources
+- query runs
+- query run results
+- jobs
+- contacts
+- artifacts
+- gaps
+- actions
+- events
+- metrics
 
-**Time Saved**: What used to take 30-45 minutes per application now takes ~5 minutes.
+The system answers:
 
-The repo also includes an active job-search operating system. The company-first command center tracks target companies, roles, actions, contacts, artifacts, gaps, and outcomes without making LinkedIn scraping the source of truth.
+- Have we seen this company or role before?
+- What is the next action?
+- Does the role fit FINTECH, AI, or an exception lane?
+- Should it be ready-to-apply, low-effort apply, warm path, portfolio gap, watch, or pass?
+- Which resume should be used?
+- What happened after submission or follow-up?
 
-Durable command-center doc:
-- `docs/job-search-command-center.md`
+LinkedIn is useful for discovery. SQLite is the source of truth.
 
-Implementation tracker:
-- Linear project: `Job Search Command Center`
-- Current Side Projects tickets: `SID-101`, `SID-102`, `SID-103`, `SID-104`
-
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              /apply Command                                  │
-└─────────────────────────────────┬───────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        Application Orchestrator                              │
-│                   (Coordinates all agents, handles retries)                  │
-└─────────────────────────────────┬───────────────────────────────────────────┘
-                                  │
-        ┌─────────────┬───────────┼───────────┬─────────────┐
-        │             │           │           │             │
-        ▼             ▼           ▼           ▼             ▼
-┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐
-│    JD     │  │  Resume   │  │  Cover    │  │ Outreach  │
-│ Assessor  │  │  Creator  │  │  Letter   │  │  Creator  │
-└─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘
-      │              │              │              │
-      ▼              ▼              ▼              ▼
-┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────┐
-│           │  │  Resume   │  │  Cover    │  │ Outreach  │
-│  JD.md    │  │ Verifier  │  │  Letter   │  │ Verifier  │
-│           │  │           │  │ Verifier  │  │           │
-└───────────┘  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘
-                     │              │              │
-                     ▼              ▼              ▼
-              ┌───────────┐  ┌───────────┐  ┌───────────┐
-              │ RESUME.md │  │COVERLETTER│  │ OUTREACH  │
-              │           │  │   .md     │  │   .md     │
-              └───────────┘  └───────────┘  └───────────┘
-```
-
-**8 Agents**:
-1. **JD Assessor** - Analyzes JD, scores fit, recommends spinning strategy
-2. **Resume Creator** - Selects bullets, applies industry spinning
-3. **Resume Verifier** - Validates character counts, structure, quality
-4. **CoverLetter Creator** - Creates short proof-first cover letters
-5. **CoverLetter Verifier** - Validates format and content
-6. **Outreach Creator** - Creates multi-track outreach strategy
-7. **Outreach Verifier** - Validates personalization and quality
-8. **Application Orchestrator** - Coordinates workflow, handles verification gates
-
----
-
-## Quick Start (5 Minutes)
+## Quick Start
 
 ### Prerequisites
+
 - [OpenCode CLI](https://opencode.ai)
 - Python 3.x
-- `pip install python-docx`
+- `python-docx`
 
-### Setup
+Install the Python dependency when needed:
 
-**1. Clone & Install**
 ```bash
-git clone https://github.com/YOUR_USERNAME/OPEN_SOURCE_JOB_APPLICATION_SYSTEM.git
-cd OPEN_SOURCE_JOB_APPLICATION_SYSTEM
 pip install python-docx
 ```
 
-**2. See Examples (2 min)**
-Open `YOUR_PROFILE/examples/` to see what filled profiles and bullets look like.
+### Initialize The Command Center
 
-**3. Fill Your Profile (2 min)**
-
-Edit `YOUR_PROFILE/USER_PROFILE.md`:
-- Name, email, phone, LinkedIn, portfolio
-- Work history (company, role, years)
-- Education
-- Resume distribution pattern
-
-Edit `YOUR_PROFILE/USER_BULLETS.md`:
-- Add 40-60 accomplishment bullets
-- Each bullet: 240-260 characters
-- Format: Action + Context + Method + Result + Impact + Business Outcome
-- Include quantified metric (%, $, time, volume, or scope)
-
-**4. Run System (1 min)**
 ```bash
-opencode
+python3 scripts/job_search.py init
+python3 scripts/job_search.py status
+python3 scripts/job_search.py action next
+```
+
+The database lives at:
+
+```text
+APPLICATIONS/_ops/job_search.sqlite
+```
+
+### Use The Daily Workflow
+
+For known companies:
+
+```bash
+python3 scripts/job_search.py company show "Company"
+python3 scripts/job_search.py job list --company "Company"
+python3 scripts/job_search.py event list --company "Company"
+```
+
+For target-company polling:
+
+```bash
+python3 scripts/job_search.py company import --file APPLICATIONS/_ops/researched-companies/fintech-targets.json
+python3 scripts/job_search.py source add "Company" --type greenhouse --key <board-token>
+python3 scripts/job_search.py poll --company "Company"
+```
+
+For broad query-pack discovery:
+
+```bash
+python3 scripts/job_search.py query packs list --default-only
+python3 scripts/job_search.py query packs show FINTECH
+python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --limit 25
+python3 scripts/job_search.py query import --file APPLICATIONS/_ops/query-runs/fintech.json
+python3 scripts/job_search.py query list
+```
+
+### Use The Skills
+
+Use `$job-search` when you want to:
+
+- search LinkedIn
+- validate a role
+- normalize a LinkedIn posting into JD text
+- gather light company or people context
+- hand off a clean JD packet to `$job-apply`
+
+Use `$job-apply` when you already have a JD and want:
+
+- resume-lane recommendation
+- apply/pass call
+- cover-letter recommendation
+- concise application answers
+- saved ready-to-apply materials
+
+Use `/apply` when you want the older full package flow:
+
+- `JD.md`
+- `RESUME.md`
+- `COVERLETTER.md`
+- `OUTREACH.md`
+- DOCX files
+
+## Product Model
+
+Default discovery lanes:
+
+- `FINTECH`: payroll, accounting, reporting, controls, identity, reconciliation, high-trust platform workflows
+- `AI`: workflow software, orchestration, operator tooling, evals, guardrails, structured-output systems
+
+Exception lanes require a specific role or target-company reason:
+
+- `ACCESS`
+- payments / insurance / crypto trust
+- media platform
+- industrial / autonomy bridge
+
+Every screened role should land in one bucket:
+
+- `ready_to_apply`
+- `low_effort_apply`
+- `stretch_warm_path`
+- `portfolio_gap`
+- `watch`
+- `pass`
+
+## Architecture
+
+```text
+Codex conversation
+  -> $job-search / $job-apply skills
+  -> scripts/job_search.py
+  -> APPLICATIONS/_ops/job_search.sqlite
+  -> APPLICATIONS/READY_TO_APPLY/<Company>_<Role>/
+```
+
+LinkedIn MCP flow:
+
+```text
+Codex LinkedIn MCP tools
+  -> saved search/detail JSON
+  -> scripts/linkedin_mcp_query_handoff.py
+  -> query-run import payload
+  -> scripts/job_search.py query import
+```
+
+Package-generation flow:
+
+```text
 /apply
-# Paste job description when prompted
+  -> JD assessment
+  -> resume creation and verification
+  -> cover letter creation and verification
+  -> outreach creation and verification
+  -> Markdown and DOCX outputs
 ```
 
-For live application routing once you already have JD text:
+## Key Commands
+
+| Command | Purpose |
+| --- | --- |
+| `python3 scripts/job_search.py init` | Create or migrate the command-center database |
+| `python3 scripts/job_search.py status` | Show current command-center state |
+| `python3 scripts/job_search.py action next` | Show queued work |
+| `python3 scripts/job_search.py company add "Company"` | Add a company |
+| `python3 scripts/job_search.py company import --file <json>` | Import researched companies |
+| `python3 scripts/job_search.py source add "Company" --type greenhouse --key <token>` | Add ATS source |
+| `python3 scripts/job_search.py poll --company "Company"` | Poll configured ATS source |
+| `python3 scripts/job_search.py query packs list --default-only` | Show default query packs |
+| `python3 scripts/job_search.py query import --file <json>` | Import a broad discovery run |
+| `python3 scripts/job_search.py query show <id>` | Inspect query-run results |
+| `python3 scripts/job_search.py metrics` | Show funnel metrics |
+| `python3 scripts/job_search.py import-pipeline` | Import legacy JSONL pipeline records |
+
+## File Structure
+
 ```text
-$job-apply
+OPEN_SOURCE_JOB_APPLICATION_SYSTEM/
+├── .agents/
+│   └── skills/
+│       ├── job-apply/
+│       └── job-search/
+├── APPLICATIONS/
+│   ├── READY_TO_APPLY/
+│   └── _ops/
+│       └── job_search.sqlite
+├── config/
+│   └── job_search_query_packs.json
+├── docs/
+│   ├── PRODUCT_STRATEGY.md
+│   ├── job-search-command-center.md
+│   └── manual-smoke-tests/
+├── PLAYBOOK/
+├── scripts/
+│   ├── job_search.py
+│   └── linkedin_mcp_query_handoff.py
+├── YOUR_PROFILE/
+│   ├── USER_PROFILE.md
+│   ├── USER_BULLETS.md
+│   ├── APPLICATION_PLAYBOOK.md
+│   ├── CAREER_STRATEGY.md
+│   ├── Fintech/FINTECH.md
+│   ├── AI/AI.md
+│   └── DESIGN.md
+├── AGENTS.md
+└── README.md
 ```
-
-For LinkedIn discovery or URL intake:
-```text
-$job-search
-```
-
-`$job-search` uses the company-first SQLite command center for durable history checks before LinkedIn discovery or role screening.
-
-**Output:** `APPLICATIONS/[Company]_[Role]/` with DOCX files ready to submit
-
----
-
-## Job Search Command Center
-
-The implemented v1 replaces the old role-first job pipeline with:
-
-- Codex as the primary daily surface
-- `scripts/job_search.py` as the deterministic CLI
-- SQLite at `APPLICATIONS/_ops/job_search.sqlite`
-- company-first tracking for target companies and prior attempts
-- action queues for screening, applying, follow-ups, research, artifacts, and outcome classification
-- minimal contacts, artifacts, gaps, and event history
-- no Markdown dashboard in v1
-- no automated polling in the first slice
-
-Core commands:
-- `python3 scripts/job_search.py init`
-- `python3 scripts/job_search.py status`
-- `python3 scripts/job_search.py company show "Company"`
-- `python3 scripts/job_search.py company update "Company" --target-roles "Product Manager" --lanes fintech`
-- `python3 scripts/job_search.py source add "Company" --type greenhouse --key <board-token>`
-- `python3 scripts/job_search.py poll --company "Company"`
-- `python3 scripts/job_search.py query import --file APPLICATIONS/_ops/query-runs/fintech.json`
-- `python3 scripts/job_search.py query list`
-- `python3 scripts/job_search.py query show <query_run_id>`
-- `python3 scripts/linkedin_mcp_query_handoff.py prepare --pack FINTECH --query-index 1 --search-json APPLICATIONS/_ops/query_runs/linkedin-search.json --details-json APPLICATIONS/_ops/query_runs/linkedin-details.json --output APPLICATIONS/_ops/query-runs/fintech-linkedin.json --import`
-- `python3 scripts/job_search.py job list --company "Company"`
-- `python3 scripts/job_search.py action next`
-- `python3 scripts/job_search.py event list --company "Company"`
-- `python3 scripts/job_search.py import-pipeline` when a legacy `APPLICATIONS/_ops/job_pipeline.jsonl` file exists
-
-V1.1 adds explicit, optional ATS-native target-company polling through configured Greenhouse, Lever, and Ashby sources. Broad LinkedIn polling remains lower priority because it is noisier and more brittle.
-Configured `target_roles` drive screen-action creation; jobs outside those role targets are still stored as `ignored_by_filter`.
-
-Cutover note: the old `scripts/job_pipeline.py` JSONL workflow has been removed. If a workspace still has legacy `APPLICATIONS/_ops/job_pipeline.jsonl` records, run `python3 scripts/job_search.py import-pipeline` once to migrate them into SQLite; the import is safe to rerun and skips duplicates.
-
----
-
-## The 6-Point Bullet Framework
-
-Every bullet must include all 6 elements:
-
-| Element | Description | Example |
-|---------|-------------|---------|
-| **Action** | Strong verb | "Led", "Built", "Designed" |
-| **Context** | Where/what/who | "cross-functional discovery for payment platform" |
-| **Method** | How you did it | "using Jobs-to-be-Done framework" |
-| **Result** | Quantified outcome | "reducing processing time by 40%" |
-| **Impact** | Business effect | "improving cash flow visibility" |
-| **Business Outcome** | Strategic value | "for Fortune 500 clients" |
-
-**Example Bullet** (255 chars):
-```
-Led cross-functional discovery for payment reconciliation platform, facilitating 15+ stakeholder interviews using Jobs-to-be-Done framework to identify friction points, reducing manual processing time by 40% and improving cash flow visibility for Fortune 500 clients.
-```
-
----
-
-## Commands
-
-| Command | Description | Output |
-|---------|-------------|--------|
-| `/apply` | Complete application package | JD.md, RESUME.md, COVERLETTER.md, OUTREACH.md, DOCX files |
-| `/init` | Validate system setup | Status report |
-| `$job-search` | Command-center-backed LinkedIn discovery, URL intake, and role screening | History checks, shortlist, normalized JD packet, fit/risk notes |
-| `$job-apply` | Route a ready JD to the right resume lane and draft answers | Resume-lane recommendation, apply/pass call, QA, ready-to-apply handoff with job link, resume, and materials |
 
 ## Validation
 
@@ -208,174 +243,27 @@ Run the deterministic repo gate before handoff:
 make test
 ```
 
----
+## Legacy Application Package Generator
 
-## File Structure
+The original package generator still exists for full tailored materials.
 
-```
-OPEN_SOURCE_JOB_APPLICATION_SYSTEM/
-├── .codex/
-│   └── config.toml               # Repo-scoped Codex MCP config
-│
-├── .agents/
-│   └── skills/
-│       ├── job-apply/
-│       └── job-search/
-│
-├── .opencode/
-│   ├── command/
-│   │   ├── apply.md               # /apply command
-│   │   └── init.md                # /init command
-│   └── agent/
-│       ├── application-orchestrator.md
-│       ├── jd-assessor.md
-│       ├── resume-creator.md
-│       ├── resume-verifier.md
-│       ├── coverletter-creator.md
-│       ├── coverletter-verifier.md
-│       ├── outreach-creator.md
-│       └── outreach-verifier.md
-│
-├── APPLICATIONS/                  # Generated applications go here
-│   ├── READY_TO_APPLY/
-│   │   └── [Company]_[Role]/
-│   └── _ops/
-│       └── job_search.sqlite       # Command-center database
-│
-├── PLAYBOOK/
-│   ├── MASTER_TEMPLATE.md         # Resume format reference
-│   ├── MASTER_RESUME.md           # Example bullets
-│   ├── RESUME_FRAMEWORK.md        # Resume creation rules
-│   ├── COVERLETTER_FRAMEWORK.md   # Cover letter templates
-│   ├── OUTREACH_FRAMEWORK.md      # Outreach strategy guide
-│   └── resume_generator.py        # DOCX conversion script
-│
-├── YOUR_PROFILE/
-│   ├── USER_PROFILE.md            # Your professional profile
-│   ├── USER_BULLETS.md            # Your bullet library
-│   ├── APPLICATION_PLAYBOOK.md     # Live application workflow guidance
-│   ├── CAREER_STRATEGY.md          # Lane strategy and cadence
-│   ├── Fintech/FINTECH.md          # Primary fintech/platform resume lane
-│   ├── Access/ACCESS.md            # Access/trust workflow resume lane
-│   ├── AI/AI.md                    # AI workflow resume lane
-│   └── DESIGN.md                   # Inactive design-lane placeholder
-│
-├── docs/
-│   ├── README.md                   # Docs router and source-of-truth map
-│   ├── job-search-command-center.md # Durable command-center model and workflow
-│   └── manual-smoke-tests/          # Targeted manual validation notes
-│
-├── AGENTS.md                      # OpenCode instructions
-└── README.md                      # This file
-```
+Generated resume rules:
 
----
+- Summary, Professional Experience, Skills, Education
+- 13 target bullets when the tailored output needs them
+- 240-260 characters per generated bullet
+- no Certifications section
+- hard skills only
+- no invented metrics
 
-## How It Works
+Cover-letter rules:
 
-### 1. JD Assessment
-The JD Assessor analyzes the job description and:
-- Extracts key requirements and competencies
-- Assigns weightage (e.g., Product Strategy 40%, Technical 25%)
-- Calculates fit score based on your profile
-- Recommends spinning strategy
-
-### 2. Resume Creation
-The Resume Creator:
-- Selects bullets from your library based on JD weightage (count from USER_PROFILE.md)
-- Applies "spinning" to match target industry language
-- Distributes bullets across roles (e.g., 3-3-3-2-2)
-
-### 3. Verification Gates
-Each component goes through verification:
-- Character count (240-260 per bullet)
-- Structure validation
-- Quality checks
-- Auto-retry on failure
-
-### 4. Output Generation
-Final output includes:
-- Markdown files (for editing)
-- DOCX files (for submission)
-
----
-
-## Spinning Strategy
-
-"Spinning" adapts your experience to the target industry without fabrication:
-
-**Example**: Healthcare PM applying to Disaster Recovery role
-
-| Original | Spun |
-|----------|------|
-| "Hospice teams serving vulnerable families" | "Response teams serving vulnerable populations in high-stakes scenarios" |
-| "Patient care workflows" | "Time-critical recovery workflows" |
-
-The system recommends spinning based on archetype matching:
-- **EARLY_STAGE** roles → Startup bullets
-- **ENTERPRISE** roles → Fortune 500 bullets
-- **GROWTH_STAGE** roles → Scaling/metrics bullets
-
----
-
-## Customization
-
-### Adjust Resume Distribution
-Edit `YOUR_PROFILE/USER_PROFILE.md`:
-```
-Distribution: 4-3-3-3
-Role Order: [Company1], [Company2], [Company3], [Company4]
-```
-
-### Add New Competency Areas
-Edit `YOUR_PROFILE/USER_BULLETS.md` to add new sections.
-
-### Modify Templates
-Edit files in `PLAYBOOK/` to adjust formats and rules.
-
----
-
-## FAQ
-
-**Q: How many bullets should I write?**
-A: Aim for 40-60 across all competency areas. The system selects 13 per application.
-
-**Q: Can I use this for non-PM roles?**
-A: Yes! The framework is universal. Adjust competency areas in YOUR_BULLETS.md.
-
-**Q: What if verification fails?**
-A: The system auto-retries once, then asks for your input.
-
-**Q: How do I verify character counts?**
-```bash
-echo "your bullet text" | wc -c
-```
-
----
-
-## Contributing
-
-PRs welcome! Areas for contribution:
-- Additional agent types (technical PM, marketing PM)
-- Alternative output formats
-- Integration with ATS platforms
-
----
-
-## License
-
-MIT License - See [LICENSE](LICENSE)
-
----
+- 100-140 words target
+- three short paragraphs
+- proof-first
+- no formal headers
 
 ## Credits
 
 Original system built by Shashikiran Devadiga.
 OpenCode fork maintained by Antonio Pontarelli.
-
-Inspired by the belief that job searching shouldn't consume your building time.
-
-**Connect:**
-- GitHub: [@shashikirandevadiga](https://github.com/shashikirandevadiga)
-- LinkedIn: [Shashikiran Devadiga](https://www.linkedin.com/in/shashikirandevadiga)
-- Portfolio: [shashikirandevadiga.com](https://shashikirandevadiga.com)

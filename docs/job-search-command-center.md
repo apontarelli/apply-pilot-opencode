@@ -306,23 +306,26 @@ python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --l
 python3 scripts/job_search.py query run --source manual_browser --pack ACCESS --reason "specific access/trust target role"
 ```
 
-`query run` is preflight-only until the query-run schema/import slice lands: it prints the source, pack, and queries while enforcing pack guardrails. Durable query-run records remain owned by SID-101.
+`query run` is a preflight planner: it prints the source, pack, and queries
+while enforcing pack guardrails. Durable records are created by `query import`
+after a reviewed source pass or adapter handoff.
+
+## Product Strategy
+
+Longer-term product direction, problem framing, milestones, and success metrics
+live in [Job Search Product Strategy](PRODUCT_STRATEGY.md).
+
+The command-center doc stays focused on the implemented operating model and
+operator workflow.
 
 ## Current Next Work
 
 Tracked in Linear project `Job Search Command Center`:
 
-- SID-101: Add query run schema and CLI import surface.
-- SID-102: Add query-pack registry with exception-pack guardrails.
-- SID-103: Groom LinkedIn MCP query adapter design.
-- SID-104: Implement LinkedIn MCP query adapter handoff.
-
-Recommended order:
-
-1. SID-102, so query-pack defaults and exception-pack rules are executable.
-2. SID-101, so manual/imported broad discovery runs have durable storage.
-3. SID-103, decision recorded; ready for review.
-4. SID-104, after query-run import and query-pack validation exist.
+- Improve daily operator summaries for `status`, `action next`, and queue-specific views.
+- Strengthen metrics around stale actions, outcome hygiene, target-company coverage, and query-run quality.
+- Add more manual smoke tests for source polling, query-run import, and LinkedIn handoff paths.
+- Turn repeated pass/rejection patterns into lane, query-pack, bullet, or artifact recommendations.
 
 ## Validation
 

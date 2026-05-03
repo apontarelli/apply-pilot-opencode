@@ -4,7 +4,8 @@ This directory holds durable repo documentation and active work plans.
 
 ## Source Of Truth
 
-- [Job Search Command Center](job-search-command-center.md): current command-center model, operator workflow, broad query strategy, and next implementation tickets.
+- [Job Search Product Strategy](PRODUCT_STRATEGY.md): product thesis, problem, milestones, success metrics, and source-of-truth map.
+- [Job Search Command Center](job-search-command-center.md): current command-center model, operator workflow, broad query strategy, and CLI behavior.
 - [Manual smoke tests](manual-smoke-tests/): targeted manual checks for command-center flows.
 
 ## Exec Plans

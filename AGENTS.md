@@ -1,270 +1,207 @@
-# AGENTS.md - Job Application Automation System
+# AGENTS.md - Job Search Command Center
 
-This file provides guidance to OpenCode when working with this repository.
+Guidance for agents working in this repository.
 
----
+## Product Source Of Truth
 
-## What This System Does
+Primary docs:
 
-An 8-agent automation system that transforms job descriptions into complete application packages.
+- `docs/PRODUCT_STRATEGY.md` - product thesis, problem, milestones, success metrics, source-of-truth map
+- `docs/job-search-command-center.md` - implemented command-center model, operator workflow, broad query strategy, CLI behavior
+- `config/job_search_query_packs.json` - machine-readable query-pack registry
+- `.agents/skills/job-search/SKILL.md` - live discovery, LinkedIn intake, and role screening workflow
+- `.agents/skills/job-apply/SKILL.md` - ready-JD application routing and answer drafting workflow
 
-It now supports 2 modes:
-- **Tailored application mode**: JD in, tailored package out
-- **Base resume mode**: maintain reusable `FINTECH.md`, `AI.md`, and `DESIGN.md` templates in `YOUR_PROFILE/`
-- **Repo skill mode**: use repo-scoped skills in `.agents/skills/` for repeatable live application workflows
+Treat `docs/PRODUCT_STRATEGY.md` as the long-term product strategy.
+Treat `docs/job-search-command-center.md` as the operational source of truth.
 
----
+## What This Product Does
 
-## Quick Start (3 Steps)
+This repo is a job-search operating system for active discovery, screening,
+application tracking, and outcome history.
 
-### 1. Set Up Your Profile (2 min)
-- **YOUR_PROFILE/USER_PROFILE.md** - Contact info, default positioning, role history, metrics, template guidance
-- **YOUR_PROFILE/USER_BULLETS.md** - Bullet library organized into `ACTIVE` and `ON ICE / REVIEW LATER`
-- **YOUR_PROFILE/Fintech/FINTECH.md / YOUR_PROFILE/AI/AI.md / YOUR_PROFILE/DESIGN.md** - Reusable base resumes by lane
-- See `examples/` folder for reference
+It supports:
 
-### 2. Run the System (1 min)
+- **Command-center mode**: company-first SQLite ledger for companies, sources, query runs, jobs, contacts, artifacts, gaps, actions, events, and metrics
+- **Job-search mode**: `$job-search` for LinkedIn-backed discovery, URL intake, role validation, and normalized JD handoff
+- **Application mode**: `$job-apply` for ready-JD lane routing, apply/pass calls, cover-letter guidance, and concise application answers
+- **Tailored package mode**: `/apply` for JD-in, tailored package-out materials
+- **Base resume mode**: reusable `FINTECH.md`, `AI.md`, and `DESIGN.md` resume lanes in `YOUR_PROFILE/`
+
+The product is manual-first with assistive automation. It prepares, classifies,
+dedupes, and queues work; it does not submit applications or message people
+without explicit human direction.
+
+## Default Workflow
+
+Start every job-search session with the command center:
+
 ```bash
-opencode
-/apply
-# Paste job description when prompted
+python3 scripts/job_search.py status
+python3 scripts/job_search.py action next
 ```
 
-For live applications using curated resumes, prefer the repo skill:
-```text
-$job-apply
+For a known company, inspect history before adding work:
+
+```bash
+python3 scripts/job_search.py company show "Company"
+python3 scripts/job_search.py job list --company "Company"
+python3 scripts/job_search.py event list --company "Company"
 ```
 
-### 3. Get Your Materials (Automatic)
-Output in `APPLICATIONS/[Company]_[Role]/`:
-- `JD.md` - Fit score and execution strategy
-- `RESUME.md` - 13 tailored bullets (240-260 chars each)
-- `COVERLETTER.md` - proof-first cover letter note
-- `OUTREACH.md` - 6-track outreach strategy
-- `[Company]_[Role]/*.docx` - Ready to submit
+For target-company work:
 
----
+```bash
+python3 scripts/job_search.py company import --file APPLICATIONS/_ops/researched-companies/fintech-targets.json
+python3 scripts/job_search.py source list --company "Company"
+python3 scripts/job_search.py poll --company "Company"
+```
 
-## Commands & Skills
+For broad discovery:
 
-### `/apply` - Complete Application Package
-**When**: You have a job description ready
-**Output**: JD.md, RESUME.md, COVERLETTER.md, OUTREACH.md + DOCX files
+```bash
+python3 scripts/job_search.py query packs list --default-only
+python3 scripts/job_search.py query packs show FINTECH
+python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --limit 25
+python3 scripts/job_search.py query import --file APPLICATIONS/_ops/query-runs/fintech.json
+python3 scripts/job_search.py query list
+python3 scripts/job_search.py query show <query_run_id>
+```
 
-### `/init` - System Validation
-**When**: First time setup, troubleshooting
-**Output**: Validates dependencies, checks file structure
+For LinkedIn MCP handoff after Codex has saved search/detail payloads:
 
-### `$job-apply` - Live Application Router
-**When**: You have a JD and want to choose the best existing resume, decide whether to pass, and draft concise application answers
-**Output**: Resume-lane recommendation, cover-letter recommendation, application answers, optional saved materials under `APPLICATIONS/`
+```bash
+python3 scripts/linkedin_mcp_query_handoff.py prepare \
+  --pack FINTECH \
+  --query-index 1 \
+  --search-json APPLICATIONS/_ops/query_runs/linkedin-search.json \
+  --details-json APPLICATIONS/_ops/query_runs/linkedin-details.json \
+  --output APPLICATIONS/_ops/query-runs/fintech-linkedin.json \
+  --import
+```
 
----
+Run `python3 scripts/job_search.py import-pipeline` only when a legacy
+`APPLICATIONS/_ops/job_pipeline.jsonl` file exists.
 
-## System Architecture
+## Product Rules
 
-### Agents (8 total)
-1. **JD Assessor** - Analyzes JD, scores fit, recommends spinning strategy
-2. **Resume Creator** - Selects bullets, applies spinning, creates resume
-3. **Resume Verifier** - Validates character counts, structure, quality
-4. **CoverLetter Creator** - Creates short proof-first cover letters
-5. **CoverLetter Verifier** - Validates word count, format
-6. **Outreach Creator** - Creates multi-track outreach with 3-tier escalation
-7. **Outreach Verifier** - Validates message quality, personalization
-8. **Application Orchestrator** - Coordinates all agents, handles retries
+- Source of truth: SQLite at `APPLICATIONS/_ops/job_search.sqlite`.
+- Primary workflow: company-first, queue-based execution.
+- Default discovery lanes: `FINTECH` / platform and `AI` / workflow.
+- Exception lanes: `ACCESS`, payments / insurance / crypto trust, media platform, industrial / autonomy, and other variants only with a specific role or target-company reason.
+- LinkedIn is a discovery source, not the source of truth.
+- Prefer Greenhouse, Lever, and Ashby APIs before official career-page browsing.
+- Use official company pages as manual/browser fallback when no ATS source is configured.
+- Broad job-board APIs are secondary/backlog; do not make SerpApi, JSearch, DataForSEO, Adzuna, or similar APIs the default backbone without a new decision.
+- Record query runs as audit trails before accepting broad-source jobs.
+- Validate promising broad-source hits through detail pages or canonical postings.
+- Keep raw LinkedIn/MCP payloads out of durable application artifacts unless explicitly captured for local debugging.
+- Do not let resume polishing block application volume.
 
-### Key Files
-- `.agents/skills/job-apply/SKILL.md` - Repo-scoped live-application skill
-- `YOUR_PROFILE/USER_PROFILE.md` - Your professional profile (YOU fill this)
-- `YOUR_PROFILE/USER_BULLETS.md` - Your bullet library (YOU fill this)
-- `YOUR_PROFILE/Fintech/FINTECH.md` - Reusable fintech/platform/AI base resume
-- `YOUR_PROFILE/AI/AI.md` - Reusable AI PM base resume
-- `YOUR_PROFILE/DESIGN.md` - Reusable design/product systems base resume
-- `YOUR_PROFILE/CAREER_STRATEGY.md` - Lane strategy, resume sequencing, and application cadence
-- `YOUR_PROFILE/APPLICATION_PLAYBOOK.md` - Live application workflow, reusable question-answer guidance, and future repo-improvement capture
-- `YOUR_PROFILE/examples/` - Reference examples for profile and bullets
-- `PLAYBOOK/MASTER_TEMPLATE.md` - Resume format template
-- `PLAYBOOK/MASTER_RESUME.md` - Example bullets (for reference)
-- `PLAYBOOK/RESUME_FRAMEWORK.md` - Resume creation rules
-- `PLAYBOOK/COVERLETTER_FRAMEWORK.md` - Cover letter templates
-- `PLAYBOOK/OUTREACH_FRAMEWORK.md` - Outreach strategy guide
+## Role Buckets
 
----
+Resolve each screened role into one bucket:
 
-## Critical Rules
+- `ready_to_apply`: strong fit, no major truth gap, ready for final human submission
+- `low_effort_apply`: good enough, base resume only, useful for volume
+- `stretch_warm_path`: strategic company, cold odds weak, concrete warm-path action required
+- `portfolio_gap`: attractive target pattern, missing reusable proof
+- `watch`: company or space matters, no clean immediate action
+- `pass`: fake story, weak interest, weak comp, high screen risk, or no next action
 
-### Resume (4 Sections Only)
-- **Summary**: Outcome-first thesis; keyword-aware, not stuffed; no invented metrics
-- **Professional Experience**: 13 bullets is the target for generated resumes, but distinct proof beats padding
-- **Each bullet**: 240-260 characters, 6-point framework
-- **Skills**: 3-5 categories, hard skills only, JD-aligned
-- **Education**: Static content from YOUR_PROFILE.md
-- **NO Certifications section**
-- **Side Projects**: Separate section when used; should support the core story, not compete with it
+Keep these questions separate:
+
+1. Do we like it?
+2. Can Antonio credibly win it now?
+3. If not now, is it worth building toward?
+
+## Resume And Application Rules
 
 ### Base Resume Rules
-- Maintain reusable lane-specific resumes in `YOUR_PROFILE/Fintech/FINTECH.md`, `YOUR_PROFILE/AI/AI.md`, and `YOUR_PROFILE/DESIGN.md`
-- Treat `YOUR_PROFILE/Fintech/FINTECH.md` as the current strongest source of truth for senior+ fintech/platform framing
-- In fintech resumes, lead with payroll/accounting/reporting/platform problems; entertainment context trails unless it adds proof
-- Keep title truthful (`Senior Product Manager`); imply staff-level scope through cross-org ownership, standards-setting, and business-critical outcomes
-- Use `ACTIVE` bullets first from `YOUR_PROFILE/USER_BULLETS.md`; pull from `ON ICE / REVIEW LATER` only with deliberate review
 
-### Job Search Operating System
-- The repo should support active application execution, not just resume drafting
-- Prefer repo-scoped skills over deprecated custom prompts for reusable workflows
-- Default application motion: use the strongest existing base resume while new variants are being built
-- Current cadence lives in `YOUR_PROFILE/CAREER_STRATEGY.md`; treat it as the default until explicitly changed
-- When helping with live applications, answer the question at hand and also capture reusable improvements in repo docs when the pattern is likely to recur
-- Prefer adding durable guidance to `YOUR_PROFILE/APPLICATION_PLAYBOOK.md`, `USER_PROFILE.md`, or `USER_BULLETS.md` over repeating the same reasoning in chat
-- Do not let resume polishing block application volume; prefer “apply now, improve system in parallel”
+- Maintain lane-specific resumes in `YOUR_PROFILE/Fintech/FINTECH.md`, `YOUR_PROFILE/AI/AI.md`, and `YOUR_PROFILE/DESIGN.md`.
+- Treat `YOUR_PROFILE/Fintech/FINTECH.md` as the current strongest source for senior+ fintech/platform framing.
+- In fintech resumes, lead with payroll/accounting/reporting/platform problems; entertainment context trails unless it adds proof.
+- Keep title truthful: `Senior Product Manager`.
+- Imply staff-level scope through cross-org ownership, standards-setting, and business-critical outcomes.
+- Use `ACTIVE` bullets from `YOUR_PROFILE/USER_BULLETS.md` first.
+- Pull from `ON ICE / REVIEW LATER` only with deliberate review.
 
-### Live Application Workflow
-- If the user brings a live application, help with the immediate form/question first
-- Then ask: should any part of this answer become reusable?
-- Reusable items belong in one of:
-  - `YOUR_PROFILE/APPLICATION_PLAYBOOK.md` for recurring application questions and answer patterns
-  - `YOUR_PROFILE/USER_PROFILE.md` for durable positioning, lane strategy, or recurring preference guidance
-  - `YOUR_PROFILE/USER_BULLETS.md` for resume proof points
-  - `APPLICATIONS/<Company>_<Role>/` for company-specific materials when the role is important enough to save
-- Capture future research or tooling ideas as backlog items rather than losing them in chat
+### Generated Resume Rules
 
-### Bullet Format (6-Point Framework)
-Each bullet must include:
-1. **Action** - Strong verb
-2. **Context** - Where/what/who
-3. **Method** - How you did it
-4. **Result** - Quantified outcome (metric)
-5. **Impact** - Business effect
-6. **Business Outcome** - Strategic value (revenue ↑, cost ↓, efficiency ↑, retention ↑, or scaling)
+- Sections: Summary, Professional Experience, Skills, Education.
+- No Certifications section.
+- Side Projects can be separate when they support the core story.
+- Summary: outcome-first, keyword-aware, no invented metrics.
+- Experience: 13 bullets is the target for generated resumes, but distinct proof beats padding.
+- Bullets: 240-260 characters when generating tailored resumes.
+- Skills: 3-5 hard-skill categories aligned to the JD.
 
-Additional quality bar:
-- Prefer business/user outcome over task description
-- Avoid repeated lead verbs and repeated scope markers unless they add meaning
-- Trust/risk outcomes are valid when that is the real business story; do not flatten every bullet into generic leverage language
-- No invented metrics; estimate carefully only when the estimate is genuinely defensible
+### Bullet Framework
 
-### Cover Letter
-- Use selectively for strong-fit or required applications
-- **3 short paragraphs**
-- **Target 100-140 words; acceptable 90-150**
-- **Structure**: team/problem hook -> proof -> contribution/close
-- **NO formal headers**
-- Plainspoken tone; slightly casual is fine; no fake enthusiasm or abstract filler
+Each bullet should include:
 
-### Metric Diversification
-Use 5 metric types across 13 bullets (no format repeats more than once):
-- **TIME**: How much faster? (45 min → 18 min, days/hours saved)
-- **VOLUME**: Scale and users (500K+, 60M+ transactions)
-- **FREQUENCY**: Recurrence (15+ interviews per cycle)
-- **SCOPE**: Geographic reach (9 markets, Fortune 500 clients)
-- **QUALITY**: Performance/satisfaction (95% UAT, 96% retention)
+1. Action
+2. Context
+3. Method
+4. Result
+5. Impact
+6. Business outcome
 
----
+No invented metrics. Use estimates only when defensible.
 
-## File Structure
+### Cover Letters
 
-```
-OPEN_SOURCE_JOB_APPLICATION_SYSTEM/
-├── .agents/
-│   └── skills/
-│       └── job-apply/
-│           ├── SKILL.md
-│           └── agents/
-│               └── openai.yaml
-│
-├── .opencode/
-│   ├── command/
-│   │   ├── apply.md               # /apply command
-│   │   └── init.md                # /init command
-│   └── agent/
-│       ├── application-orchestrator.md
-│       ├── jd-assessor.md
-│       ├── resume-creator.md
-│       ├── resume-verifier.md
-│       ├── coverletter-creator.md
-│       ├── coverletter-verifier.md
-│       ├── outreach-creator.md
-│       └── outreach-verifier.md
-│
-├── APPLICATIONS/                  # Generated applications
-│   └── [Company]_[Role]/
-│       ├── JD.md
-│       ├── RESUME.md
-│       ├── COVERLETTER.md
-│       ├── OUTREACH.md
-│       └── [Company]_[Role]/
-│           ├── Resume.docx
-│           └── Coverletter.docx
-│
-├── PLAYBOOK/
-│   ├── MASTER_TEMPLATE.md         # Resume format reference
-│   ├── MASTER_RESUME.md           # Example bullets
-│   ├── RESUME_FRAMEWORK.md        # Resume creation rules
-│   ├── COVERLETTER_FRAMEWORK.md   # Cover letter templates
-│   ├── OUTREACH_FRAMEWORK.md      # Outreach strategy guide
-│   └── resume_generator.py        # DOCX conversion script
-│
-├── YOUR_PROFILE/
-│   ├── USER_PROFILE.md            # Your professional profile
-│   ├── USER_BULLETS.md            # Your bullet library
-│   └── examples/
-│       ├── EXAMPLE_USER_PROFILE.md
-│       ├── EXAMPLE_USER_BULLETS.md
-│       └── EXAMPLE_JD.md
-│
-├── AGENTS.md                      # OpenCode instructions (this file)
-└── README.md                      # Setup guide
-```
+- Use selectively for strong-fit or required applications.
+- Target 100-140 words; acceptable 90-150.
+- Structure: team/problem hook, proof, contribution/close.
+- No formal headers.
+- Plainspoken tone; no fake enthusiasm or abstract filler.
 
----
+## Key Files
 
-## Dependencies
+- `scripts/job_search.py` - deterministic command-center CLI
+- `scripts/linkedin_mcp_query_handoff.py` - local LinkedIn MCP result normalizer
+- `APPLICATIONS/_ops/job_search.sqlite` - command-center database
+- `APPLICATIONS/READY_TO_APPLY/` - saved high-signal application packages
+- `YOUR_PROFILE/USER_PROFILE.md` - profile, role history, education, durable positioning
+- `YOUR_PROFILE/USER_BULLETS.md` - proof library
+- `YOUR_PROFILE/CAREER_STRATEGY.md` - lane strategy, comp bands, cadence
+- `YOUR_PROFILE/APPLICATION_PLAYBOOK.md` - recurring application question guidance
+- `PLAYBOOK/` - legacy package-generation templates and DOCX script
 
-- Python 3.x
-- python-docx (`pip install python-docx`)
-- OpenCode CLI
+## Verification
 
----
+Before handoff, run the strongest feasible gate:
 
-## Verification Commands
-
-Repo validation:
 ```bash
 make test
 ```
 
-Character count verification:
-```bash
-echo "Your bullet text here" | wc -c
-```
+For command-center changes, include targeted coverage around:
 
-Word count verification:
-```bash
-echo "Your text here" | wc -w
-```
+- migrations
+- duplicate detection
+- action generation
+- query-pack validation
+- query-run import/list/show behavior
+- metrics aggregation when touched
 
----
+When adding or changing tests, use `$high-signal-tests`. Before handoff on
+non-trivial test changes, run `$test-deslop` on the diff.
 
-## Troubleshooting
+## Repo Maintenance
 
-**"USER_PROFILE.md not found"**
-→ Fill out `YOUR_PROFILE/USER_PROFILE.md` with your information (see examples folder)
+For live applications, answer the immediate form or decision first. Then ask
+whether any part should become reusable.
 
-**"No bullets found in USER_BULLETS.md"**
-→ Fill out `YOUR_PROFILE/USER_BULLETS.md` with 40-60 accomplishment bullets
+Reusable items belong in:
 
-**"Bullet character count out of range"**
-→ Adjust each bullet to exactly 240-260 characters: `echo "bullet text" | wc -c`
+- `YOUR_PROFILE/APPLICATION_PLAYBOOK.md` for recurring application questions
+- `YOUR_PROFILE/USER_PROFILE.md` for durable positioning or preferences
+- `YOUR_PROFILE/USER_BULLETS.md` for proof points
+- `APPLICATIONS/<Company>_<Role>/` or `APPLICATIONS/READY_TO_APPLY/<Company>_<Role>/` for company-specific materials
+- `docs/PRODUCT_STRATEGY.md` for product strategy changes
+- `docs/job-search-command-center.md` for operating-model changes
 
-**"Summary character count out of range"**
-→ Adjust summary to 360-380 characters: `echo "summary" | wc -c`
-
-**"DOCX conversion failed"**
-→ Run `pip install python-docx` and try again
-
-**"Resume verification failed"**
-→ Check RESUME.md meets all requirements:
-  - 4 sections (Summary, Experience, Skills, Education)
-  - 13 bullets when tailored output needs them; do not pad weak bullets just to hit a fixed split
-  - All bullets 240-260 chars
-  - No Certifications section
+Capture recurring failures as one of: test, script, guardrail, or runbook.
