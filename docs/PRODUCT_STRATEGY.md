@@ -1,6 +1,6 @@
 # Job Search Product Strategy
 
-This is the product source of truth for the job-search system. The detailed operating model lives in [Job Search Command Center](job-search-command-center.md).
+This is the product source of truth for the job-search system. The detailed operating model lives in [How It Works](HOW_IT_WORKS.md).
 
 ## Product Thesis
 
@@ -41,7 +41,7 @@ For every serious role or target company, the system should answer:
 - Control layer: `scripts/job_search.py`.
 - Source of truth: SQLite at `APPLICATIONS/_ops/job_search.sqlite`.
 - Strategy source: this document.
-- Operating-model source: `docs/job-search-command-center.md`.
+- Operating-model source: `docs/HOW_IT_WORKS.md`.
 - Primary workflow: company-first, queue-based execution.
 - Default discovery lanes: FINTECH / platform PM and AI workflow PM.
 - Exception lanes: ACCESS / trust workflow, payments / insurance / crypto trust, media platform, industrial / autonomy bridge, and other variants only when a specific role or target-company reason warrants them.
@@ -258,7 +258,7 @@ Strategic metrics:
 ## Source-Of-Truth Map
 
 - Product strategy: `docs/PRODUCT_STRATEGY.md`
-- Command-center operating model: `docs/job-search-command-center.md`
+- Command-center operating model: `docs/HOW_IT_WORKS.md`
 - Query pack registry: `config/job_search_query_packs.json`
 - Query pack prose guidance: `.agents/skills/job-search/references/query-packs.md`
 - Discovery skill: `.agents/skills/job-search/SKILL.md`
