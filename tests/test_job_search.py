@@ -2171,7 +2171,8 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertIn("job updated id=1", first_ready.stdout)
             self.assertIn("job updated id=1", second_ready.stdout)
             self.assertIn(
-                "#3 | apply:apply | queued | due=unscheduled | Coinbase / Senior Product Manager",
+                "#3 | apply:apply | ready | status=queued | due=unscheduled | "
+                "Coinbase / Senior Product Manager",
                 next_apply.stdout,
             )
             self.assertIn("job=#1", next_apply.stdout)
@@ -2248,10 +2249,164 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertIn("action added id=1", first.stdout)
             self.assertIn("action existing id=1", second.stdout)
             self.assertIn(
-                "#1 | research:vet_company | queued | "
+                "#1 | research:vet_company | stale | status=queued | "
                 "due=2026-04-30T16:00:00+00:00 | Ramp",
                 next_research.stdout,
             )
+
+    def test_action_queue_review_views_show_state_order_and_linked_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            due_now = JOB_SEARCH.utc_now()
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "QueueCo")
+                    job_id = self.insert_job(connection, company_id)
+                    contact_id = self.insert_contact(connection, company_id)
+                    artifact_id = self.insert_artifact(
+                        connection,
+                        company_id,
+                        job_id,
+                        status="ready",
+                        path="APPLICATIONS/QueueCo/artifact.md",
+                    )
+                    gap_id = self.insert_gap(connection, company_id, job_id)
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        job_id=job_id,
+                        queue="screen",
+                        kind="screen_role",
+                        due_at="2000-01-01T00:00:00+00:00",
+                    )
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        queue="screen",
+                        kind="screen_due",
+                        due_at=due_now,
+                    )
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        queue="screen",
+                        kind="screen_blocked",
+                        status="blocked",
+                    )
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        queue="screen",
+                        kind="screen_ready",
+                    )
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        queue="screen",
+                        kind="screen_done",
+                        status="done",
+                        completed_at=due_now,
+                    )
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        job_id=job_id,
+                        queue="apply",
+                        kind="apply",
+                        due_at=due_now,
+                    )
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        contact_id=contact_id,
+                        queue="follow_up",
+                        kind="follow_up",
+                        status="blocked",
+                        due_at="2000-01-01T00:00:00+00:00",
+                    )
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        queue="research",
+                        kind="vet_company",
+                        due_at="2999-01-01T00:00:00+00:00",
+                    )
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        artifact_id=artifact_id,
+                        queue="artifact",
+                        kind="draft_artifact",
+                    )
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        gap_id=gap_id,
+                        queue="classify",
+                        kind="classify_gap",
+                    )
+
+            expected_by_queue = {
+                "screen": ("stale", "job=#1"),
+                "apply": ("due", "job=#1"),
+                "follow_up": ("blocked", "contact=#1 Hiring Manager"),
+                "research": ("ready", "QueueCo"),
+                "artifact": (
+                    "ready",
+                    "artifact=#1 memo status=ready path=APPLICATIONS/QueueCo/artifact.md",
+                ),
+                "classify": ("ready", "gap=#1 medium status=open Needs proof"),
+            }
+            for queue, expected in expected_by_queue.items():
+                with self.subTest(queue=queue):
+                    reviewed = self.run_cli(
+                        db_path, "action", "next", "--queue", queue, "--limit", "1"
+                    )
+                    self.assertIn(f"| {queue}:", reviewed.stdout)
+                    for text in expected:
+                        self.assertIn(text, reviewed.stdout)
+
+            listed = self.run_cli(db_path, "action", "list", "--queue", "screen", "--limit", "2")
+            listed_lines = listed.stdout.splitlines()
+            self.assertEqual(len(listed_lines), 2)
+            self.assertIn("| screen:screen_role | stale |", listed_lines[0])
+            self.assertIn("| screen:screen_due | due |", listed_lines[1])
+            self.assertNotIn("screen_blocked", listed.stdout)
+            self.assertNotIn("screen_done", listed.stdout)
+
+            done = self.run_cli(
+                db_path,
+                "action",
+                "list",
+                "--queue",
+                "screen",
+                "--status",
+                "done",
+                "--limit",
+                "1",
+            )
+            self.assertIn("| screen:screen_done | done | status=done |", done.stdout)
+
+            invalid = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "action",
+                    "next",
+                    "--queue",
+                    "network",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertIn("invalid choice: 'network'", invalid.stderr)
 
     def test_job_state_changes_generate_follow_up_and_classify_actions(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

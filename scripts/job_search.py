@@ -2755,7 +2755,8 @@ def format_action(row: sqlite3.Row) -> str:
     if row["job_id"]:
         subject += f" | job=#{row['job_id']}"
     parts = [
-        f"#{row['id']} | {row['queue']}:{row['kind']} | {row['status']} | "
+        f"#{row['id']} | {row['queue']}:{row['kind']} | "
+        f"{action_review_state(row)} | status={row['status']} | "
         f"due={due} | {subject}"
     ]
     if row["job_url"]:
@@ -2764,7 +2765,67 @@ def format_action(row: sqlite3.Row) -> str:
         parts.append(f"resume={row['job_resume']}")
     if row["job_application_folder"]:
         parts.append(f"materials={row['job_application_folder']}")
+    if row["contact_id"]:
+        contact = f"contact=#{row['contact_id']} {row['contact_name']}"
+        if row["contact_title"]:
+            contact += f" ({row['contact_title']})"
+        parts.append(contact)
+    if row["artifact_id"]:
+        artifact = (
+            f"artifact=#{row['artifact_id']} "
+            f"{row['artifact_type']} status={row['artifact_status']}"
+        )
+        if row["artifact_link"]:
+            artifact += f" link={row['artifact_link']}"
+        if row["artifact_path"]:
+            artifact += f" path={row['artifact_path']}"
+        parts.append(artifact)
+    if row["gap_id"]:
+        parts.append(
+            f"gap=#{row['gap_id']} {row['gap_severity']} "
+            f"status={row['gap_status']} {row['gap_description']}"
+        )
     return " | ".join(parts)
+
+
+def action_review_state(row: sqlite3.Row) -> str:
+    if row["status"] in TERMINAL_ACTION_STATUSES:
+        return str(row["status"])
+    if row["status"] == "blocked":
+        return "blocked"
+    try:
+        due_at = parse_optional_utc(row["due_at"])
+    except ValueError:
+        due_at = None
+    if due_at is None:
+        return "ready"
+
+    now = datetime.now(timezone.utc)
+    if due_at.tzinfo is None:
+        due_at = due_at.replace(tzinfo=timezone.utc)
+    if due_at < now.replace(hour=0, minute=0, second=0, microsecond=0):
+        return "stale"
+    if due_at <= now:
+        return "due"
+    return "ready"
+
+
+def action_review_order_sql() -> str:
+    return """
+            CASE
+                WHEN actions.status = 'blocked' THEN 2
+                WHEN actions.due_at IS NOT NULL
+                    AND julianday(actions.due_at) < julianday('now', 'start of day')
+                    THEN 0
+                WHEN actions.due_at IS NOT NULL
+                    AND julianday(actions.due_at) <= julianday('now')
+                    THEN 1
+                ELSE 3
+            END,
+            CASE WHEN actions.due_at IS NULL THEN 1 ELSE 0 END,
+            actions.due_at,
+            actions.id
+    """
 
 
 def format_action_next(row: sqlite3.Row) -> str:
@@ -2811,15 +2872,25 @@ def action_rows_query(where_sql: str = "") -> str:
             jobs.location AS job_location,
             jobs.remote_status AS job_remote_status,
             jobs.recommended_resume AS job_resume,
-            jobs.application_folder AS job_application_folder
+            jobs.application_folder AS job_application_folder,
+            contacts.name AS contact_name,
+            contacts.title AS contact_title,
+            artifacts.type AS artifact_type,
+            artifacts.status AS artifact_status,
+            artifacts.link AS artifact_link,
+            artifacts.path AS artifact_path,
+            gaps.description AS gap_description,
+            gaps.severity AS gap_severity,
+            gaps.status AS gap_status
         FROM actions
         JOIN companies ON companies.id = actions.company_id
         LEFT JOIN jobs ON jobs.id = actions.job_id
+        LEFT JOIN contacts ON contacts.id = actions.contact_id
+        LEFT JOIN artifacts ON artifacts.id = actions.artifact_id
+        LEFT JOIN gaps ON gaps.id = actions.gap_id
         {where_sql}
         ORDER BY
-            CASE WHEN actions.due_at IS NULL THEN 1 ELSE 0 END,
-            actions.due_at,
-            actions.id
+            {action_review_order_sql()}
     """
 
 
@@ -4531,9 +4602,12 @@ def command_action_list(args: argparse.Namespace) -> int:
     if args.status:
         filters.append("actions.status = ?")
         params.append(args.status)
+    else:
+        filters.append(open_action_where_clause("actions"))
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
+    params.append(args.limit)
     with closing(connect(db_path)) as connection:
-        rows = connection.execute(action_rows_query(where), params).fetchall()
+        rows = connection.execute(action_rows_query(where) + " LIMIT ?", params).fetchall()
     for row in rows:
         print(format_action(row))
     if not rows:
@@ -4961,7 +5035,7 @@ def parse_args() -> argparse.Namespace:
     action_add.add_argument("--company", required=True)
     action_add.add_argument(
         "--queue",
-        choices=("screen", "apply", "follow_up", "research", "artifact", "classify"),
+        choices=ACTION_QUEUES,
         required=True,
     )
     action_add.add_argument("--kind", required=True)
@@ -4974,18 +5048,19 @@ def parse_args() -> argparse.Namespace:
     action_next = action_subparsers.add_parser("next", help="Show next queued actions.")
     action_next.add_argument(
         "--queue",
-        choices=("screen", "apply", "follow_up", "research", "artifact", "classify"),
+        choices=ACTION_QUEUES,
     )
-    action_next.add_argument("--limit", type=int, default=10)
+    action_next.add_argument("--limit", type=positive_int, default=10)
     action_list = action_subparsers.add_parser("list", help="List actions.")
     action_list.add_argument(
         "--queue",
-        choices=("screen", "apply", "follow_up", "research", "artifact", "classify"),
+        choices=ACTION_QUEUES,
     )
     action_list.add_argument(
         "--status",
         choices=("queued", "in_progress", "done", "blocked", "skipped", "rescheduled"),
     )
+    action_list.add_argument("--limit", type=positive_int, default=50)
     action_done = action_subparsers.add_parser("done", help="Mark an action done.")
     action_done.add_argument("action_id", type=int)
     action_done.add_argument("--notes")
