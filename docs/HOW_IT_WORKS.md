@@ -53,6 +53,7 @@ python3 scripts/linkedin_mcp_query_handoff.py prepare --pack FINTECH --query-ind
 python3 scripts/job_search.py job add --company "Company" --title "Senior Product Manager" --source manual
 python3 scripts/job_search.py job list --company "Company"
 python3 scripts/job_search.py action next --queue apply --limit 5
+python3 scripts/job_search.py action list --queue apply --limit 25
 python3 scripts/job_search.py action done <action_id>
 python3 scripts/job_search.py event add --company "Company" --type note --notes "..."
 python3 scripts/job_search.py event list --company "Company"
@@ -87,6 +88,24 @@ python3 scripts/job_search.py event list --company "Company"
 - `research`: fill company, role, or domain gaps.
 - `artifact`: build or send targeted proof.
 - `classify`: record outcomes, rejection reasons, or stale state.
+
+Use a direct review command for each daily lane:
+
+```bash
+python3 scripts/job_search.py action next --queue screen --limit 10
+python3 scripts/job_search.py action next --queue apply --limit 10
+python3 scripts/job_search.py action next --queue follow_up --limit 10
+python3 scripts/job_search.py action next --queue research --limit 10
+python3 scripts/job_search.py action next --queue artifact --limit 10
+python3 scripts/job_search.py action next --queue classify --limit 10
+```
+
+Use `action list --queue <queue> --limit <n>` when reviewing a larger lane backlog.
+By default, `action next` and `action list` show open work only. Add `--status done`,
+`--status skipped`, or another lifecycle status when reviewing history or a specific
+state. Open queue review output labels each shown action as `stale`, `due`, `blocked`,
+or `ready`, then shows linked company, job, contact, artifact, and gap context when
+present.
 
 4. Record the final state in SQLite through `scripts/job_search.py`.
 
