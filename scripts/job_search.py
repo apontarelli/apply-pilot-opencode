@@ -77,6 +77,10 @@ EVENT_TYPES = (
 NO_INTERVIEW_COOLDOWN_DAYS = 45
 INTERVIEW_LOOP_COOLDOWN_DAYS = 120
 LIKELY_DUPLICATE_WINDOW_DAYS = 60
+HYGIENE_ACTION_QUEUES = ("follow_up", "apply", "classify")
+HYGIENE_COMPANY_ACTIVITY_DAYS = 14
+HYGIENE_PENDING_OUTCOME_DAYS = 14
+HYGIENE_UNSCHEDULED_ACTION_DAYS = 7
 GENERIC_TITLE_TOKENS = {
     "associate",
     "director",
@@ -1670,6 +1674,241 @@ def read_daily_status(db_path: Path) -> dict[str, object]:
     }
 
 
+def parse_report_as_of(value: str | None) -> datetime:
+    if value is None:
+        return datetime.now(timezone.utc).replace(microsecond=0)
+    parsed = parse_utc(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def command_center_record_count(connection: sqlite3.Connection) -> int:
+    return sum(
+        int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+        for table in (
+            "companies",
+            "company_sources",
+            "query_runs",
+            "query_run_results",
+            "jobs",
+            "contacts",
+            "artifacts",
+            "gaps",
+            "actions",
+            "events",
+        )
+    )
+
+
+def stale_hygiene_actions(
+    connection: sqlite3.Connection,
+    *,
+    as_of: datetime,
+    unscheduled_days: int,
+    limit: int,
+) -> list[sqlite3.Row]:
+    rows = connection.execute(
+        action_rows_query(
+            f"""
+            WHERE actions.queue IN ({", ".join("?" for _ in HYGIENE_ACTION_QUEUES)})
+                AND {open_action_where_clause('actions')}
+            """
+        ),
+        HYGIENE_ACTION_QUEUES,
+    ).fetchall()
+    as_of_date = as_of.date()
+    old_unscheduled_before = as_of - timedelta(days=unscheduled_days)
+    stale_rows = []
+    for row in rows:
+        if due_state(row["due_at"], today=as_of_date) == "stale":
+            stale_rows.append(row)
+            continue
+        created_at = parse_optional_utc(row["created_at"])
+        if row["due_at"] is None and created_at is not None and created_at < old_unscheduled_before:
+            stale_rows.append(row)
+    return stale_rows[:limit]
+
+
+def outcome_hygiene_gaps(
+    connection: sqlite3.Connection,
+    *,
+    as_of: datetime,
+    pending_days: int,
+    limit: int,
+) -> list[dict[str, object]]:
+    rows = connection.execute(
+        """
+        SELECT
+            jobs.id AS job_id,
+            jobs.title AS job_title,
+            jobs.status AS job_status,
+            jobs.rejection_reason,
+            jobs.application_outcome,
+            companies.id AS company_id,
+            companies.name AS company_name,
+            latest.event_id,
+            latest.event_type,
+            latest.happened_at
+        FROM jobs
+        JOIN companies ON companies.id = jobs.company_id
+        JOIN (
+            SELECT
+                id AS event_id,
+                job_id,
+                event_type,
+                happened_at
+            FROM events
+            WHERE job_id IS NOT NULL
+                AND event_type IN ('application_submitted', 'interview', 'rejection_received')
+        ) AS latest ON latest.job_id = jobs.id
+        ORDER BY jobs.id, latest.event_id
+        """
+    ).fetchall()
+
+    latest_by_job: dict[int, tuple[datetime, sqlite3.Row]] = {}
+    for row in rows:
+        event_at = parse_optional_utc(row["happened_at"])
+        if event_at is None or event_at > as_of:
+            continue
+        job_id = int(row["job_id"])
+        current = latest_by_job.get(job_id)
+        if current is None or (event_at, int(row["event_id"])) > (
+            current[0],
+            int(current[1]["event_id"]),
+        ):
+            latest_by_job[job_id] = (event_at, row)
+
+    pending_before = as_of - timedelta(days=pending_days)
+    gaps: list[dict[str, object]] = []
+    for event_at, row in sorted(
+        latest_by_job.values(), key=lambda item: (item[0], int(item[1]["job_id"]))
+    ):
+        event_type = str(row["event_type"])
+        job_status = str(row["job_status"])
+        application_outcome = row["application_outcome"]
+        rejection_reason = row["rejection_reason"]
+        issue = None
+        if event_type == "rejection_received":
+            if job_status not in ("rejected", "closed", "archived"):
+                issue = "rejection_event_status_mismatch"
+            elif not application_outcome and not rejection_reason:
+                issue = "unclassified_rejection"
+        elif event_type in ("application_submitted", "interview") and job_status not in (
+            "applied",
+            "interviewing",
+            "rejected",
+            "closed",
+            "archived",
+        ):
+            issue = f"{event_type}_status_mismatch"
+        elif (
+            event_type in ("application_submitted", "interview")
+            and event_at < pending_before
+            and job_status in ("applied", "interviewing")
+            and not application_outcome
+        ):
+            issue = "pending_final_disposition"
+        if issue is not None:
+            gaps.append(
+                {
+                    "issue": issue,
+                    "job_id": row["job_id"],
+                    "job_title": row["job_title"],
+                    "job_status": job_status,
+                    "company_id": row["company_id"],
+                    "company_name": row["company_name"],
+                    "event_id": row["event_id"],
+                    "event_type": event_type,
+                    "happened_at": row["happened_at"],
+                }
+            )
+        if len(gaps) >= limit:
+            break
+    return gaps
+
+
+def companies_without_next_action(
+    connection: sqlite3.Connection,
+    *,
+    as_of: datetime,
+    activity_days: int,
+    limit: int,
+) -> list[sqlite3.Row]:
+    activity_since = as_of - timedelta(days=activity_days)
+    rows = connection.execute(
+        f"""
+        SELECT
+            companies.id AS company_id,
+            companies.name AS company_name,
+            companies.status AS company_status,
+            latest.id AS event_id,
+            latest.event_type,
+            latest.happened_at
+        FROM companies
+        JOIN events AS latest ON latest.company_id = companies.id
+        WHERE companies.status IN ('active', 'watch')
+            AND latest.event_type <> 'company_added'
+            AND NOT EXISTS (
+                SELECT 1
+                FROM actions
+                WHERE actions.company_id = companies.id
+                    AND {open_action_where_clause('actions')}
+            )
+        ORDER BY companies.id, latest.id
+        """,
+        (),
+    ).fetchall()
+    latest_by_company: dict[int, tuple[datetime, sqlite3.Row]] = {}
+    for row in rows:
+        event_at = parse_optional_utc(row["happened_at"])
+        if event_at is None or event_at < activity_since or event_at > as_of:
+            continue
+        company_id = int(row["company_id"])
+        current = latest_by_company.get(company_id)
+        if current is None or (event_at, int(row["event_id"])) > (
+            current[0],
+            int(current[1]["event_id"]),
+        ):
+            latest_by_company[company_id] = (event_at, row)
+    return [
+        row
+        for _, row in sorted(
+            latest_by_company.values(),
+            key=lambda item: (item[0], int(item[1]["company_id"])),
+        )[:limit]
+    ]
+
+
+def format_hygiene_action(row: sqlite3.Row, *, as_of: datetime) -> str:
+    subject = f"company=#{row['company_id']} {row['company_name']}"
+    if row["job_id"]:
+        subject += f" | job=#{row['job_id']} {row['job_title']}"
+    age_state = "old_unscheduled" if row["due_at"] is None else "scheduled"
+    return (
+        f"- action=#{row['id']} | queue={row['queue']} | kind={row['kind']} | "
+        f"status={row['status']} | due={row['due_at'] or 'unscheduled'} | "
+        f"due_state={due_state(row['due_at'], today=as_of.date())} | "
+        f"age_state={age_state} | {subject}"
+    )
+
+
+def format_outcome_gap(gap: dict[str, object]) -> str:
+    return (
+        f"- issue={gap['issue']} | job=#{gap['job_id']} {gap['job_title']} | "
+        f"status={gap['job_status']} | company=#{gap['company_id']} {gap['company_name']} | "
+        f"event=#{gap['event_id']} {gap['event_type']} at {gap['happened_at']}"
+    )
+
+
+def format_company_hygiene(row: sqlite3.Row) -> str:
+    return (
+        f"- company=#{row['company_id']} {row['company_name']} | "
+        f"status={row['company_status']} | latest_event=#{row['event_id']} "
+        f"{row['event_type']} at {row['happened_at']} | open_actions=0"
+    )
+
+
 def pipeline_status_to_job_status(status: str | None) -> str:
     if status == "ready_to_apply":
         return "ready_to_apply"
@@ -1903,6 +2142,20 @@ def require_database(db_path: Path) -> None:
     if not db_path.exists():
         raise FileNotFoundError(f"Database not initialized: {db_path}")
     init_database(db_path)
+
+
+def require_current_database_read_only(db_path: Path) -> None:
+    if not db_path.exists():
+        raise FileNotFoundError(f"Database not initialized: {db_path}")
+    with closing(connect(db_path)) as connection:
+        version = connection.execute(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+        ).fetchone()[0]
+    if version < SCHEMA_VERSION:
+        raise ValueError(
+            f"Database schema_version={version} is older than {SCHEMA_VERSION}; "
+            "run init before reporting."
+        )
 
 
 def get_company(connection: sqlite3.Connection, name: str) -> sqlite3.Row:
@@ -4542,6 +4795,85 @@ def command_metrics(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_report_hygiene(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_current_database_read_only(db_path)
+    as_of = parse_report_as_of(args.as_of)
+    if args.limit <= 0:
+        raise ValueError("report hygiene --limit must be a positive integer")
+    if args.company_activity_days < 1:
+        raise ValueError("report hygiene --company-activity-days must be positive")
+    if args.pending_outcome_days < 1:
+        raise ValueError("report hygiene --pending-outcome-days must be positive")
+    if args.unscheduled_action_days < 1:
+        raise ValueError("report hygiene --unscheduled-action-days must be positive")
+
+    with closing(connect(db_path)) as connection:
+        record_count = command_center_record_count(connection)
+        stale_actions = stale_hygiene_actions(
+            connection,
+            as_of=as_of,
+            unscheduled_days=args.unscheduled_action_days,
+            limit=args.limit,
+        )
+        outcome_gaps = outcome_hygiene_gaps(
+            connection,
+            as_of=as_of,
+            pending_days=args.pending_outcome_days,
+            limit=args.limit,
+        )
+        companies_without_actions = companies_without_next_action(
+            connection,
+            as_of=as_of,
+            activity_days=args.company_activity_days,
+            limit=args.limit,
+        )
+
+    print(f"Hygiene report as_of={as_of.isoformat()}")
+    print(
+        "Thresholds: "
+        f"company_activity_days={args.company_activity_days} | "
+        f"pending_outcome_days={args.pending_outcome_days} | "
+        f"unscheduled_action_days={args.unscheduled_action_days}"
+    )
+    if record_count == 0:
+        print("No command center data.")
+        print("Next step: add a company, import a query run, or poll a target company.")
+        return 0
+
+    finding_count = (
+        len(stale_actions) + len(outcome_gaps) + len(companies_without_actions)
+    )
+    if finding_count == 0:
+        print(
+            "All clean: no stale actions, outcome gaps, or active companies "
+            "without next action."
+        )
+        return 0
+
+    print("Stale actions:")
+    if stale_actions:
+        for row in stale_actions:
+            print(format_hygiene_action(row, as_of=as_of))
+    else:
+        print("- none")
+
+    print("Outcome gaps:")
+    if outcome_gaps:
+        for gap in outcome_gaps:
+            print(format_outcome_gap(gap))
+    else:
+        print("- none")
+
+    print("Companies with recent activity and no next action:")
+    if companies_without_actions:
+        for row in companies_without_actions:
+            print(format_company_hygiene(row))
+    else:
+        print("- none")
+    return 0
+
+
 def command_action_next(args: argparse.Namespace) -> int:
     db_path = Path(args.db_path)
     require_database(db_path)
@@ -5103,6 +5435,31 @@ def parse_args() -> argparse.Namespace:
     metrics.add_argument("--since")
     metrics.add_argument("--until")
     metrics.add_argument("--days", type=int, default=7)
+    report = subparsers.add_parser("report", help="Show read-only hygiene reports.")
+    report_subparsers = report.add_subparsers(
+        dest="report_command", metavar="command", required=True
+    )
+    hygiene = report_subparsers.add_parser(
+        "hygiene",
+        help="Show stale actions, outcome gaps, and companies needing next actions.",
+    )
+    hygiene.add_argument("--as-of")
+    hygiene.add_argument("--limit", type=int, default=20)
+    hygiene.add_argument(
+        "--company-activity-days",
+        type=int,
+        default=HYGIENE_COMPANY_ACTIVITY_DAYS,
+    )
+    hygiene.add_argument(
+        "--pending-outcome-days",
+        type=int,
+        default=HYGIENE_PENDING_OUTCOME_DAYS,
+    )
+    hygiene.add_argument(
+        "--unscheduled-action-days",
+        type=int,
+        default=HYGIENE_UNSCHEDULED_ACTION_DAYS,
+    )
 
     return parser.parse_args()
 
@@ -5316,6 +5673,9 @@ def main() -> int:
                 return command_event_add(args)
             if args.event_command == "list":
                 return command_event_list(args)
+        if args.command == "report":
+            if args.report_command == "hygiene":
+                return command_report_hygiene(args)
         if args.command == "action":
             if args.action_command == "add":
                 return command_action_add(args)

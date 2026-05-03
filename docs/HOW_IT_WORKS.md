@@ -58,6 +58,7 @@ python3 scripts/job_search.py action done <action_id>
 python3 scripts/job_search.py event add --company "Company" --type note --notes "..."
 python3 scripts/job_search.py event list --company "Company"
 python3 scripts/job_search.py metrics
+python3 scripts/job_search.py report hygiene
 python3 scripts/job_search.py import-pipeline
 ```
 
@@ -108,6 +109,19 @@ or `ready`, then shows linked company, job, contact, artifact, and gap context w
 present.
 
 4. Record the final state in SQLite through `scripts/job_search.py`.
+
+5. Check hygiene before ending a session:
+
+```bash
+python3 scripts/job_search.py report hygiene
+```
+
+The hygiene report is read-only. It surfaces stale `follow_up`, `apply`, and
+`classify` actions, old unscheduled apply/classify/follow-up actions, jobs whose
+application or rejection events still need final outcome/disposition cleanup,
+and recently active companies that no longer have an open next action. Each row
+includes stable action, job, company, or event IDs needed to resolve the item
+through the normal command paths.
 
 ## Target-Company Polling
 

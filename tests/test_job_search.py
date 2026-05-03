@@ -165,6 +165,8 @@ class JobSearchDatabaseTests(unittest.TestCase):
         artifact_id: int | None = None,
         gap_id: int | None = None,
         action_id: int | None = None,
+        event_type: str = "note",
+        happened_at: str = NOW,
     ) -> int:
         connection.execute(
             """
@@ -181,8 +183,8 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 artifact_id,
                 gap_id,
                 action_id,
-                "note",
-                NOW,
+                event_type,
+                happened_at,
                 NOW,
             ),
         )
@@ -330,6 +332,288 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 "needs_source=1 | stale_checks=2",
                 status.stdout,
             )
+
+    def test_report_hygiene_surfaces_stale_actions_and_outcome_gaps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    ready_company = self.insert_company(connection, "Ready Co")
+                    ready_job = self.insert_job(connection, ready_company)
+                    connection.execute(
+                        "UPDATE jobs SET status = 'ready_to_apply' WHERE id = ?",
+                        (ready_job,),
+                    )
+                    self.insert_action(
+                        connection,
+                        ready_company,
+                        job_id=ready_job,
+                        queue="apply",
+                        kind="apply",
+                        due_at="2026-04-01T00:00:00+00:00",
+                    )
+
+                    follow_company = self.insert_company(connection, "Follow Co")
+                    follow_job = self.insert_job(connection, follow_company)
+                    self.insert_action(
+                        connection,
+                        follow_company,
+                        job_id=follow_job,
+                        queue="follow_up",
+                        kind="follow_up",
+                        due_at="2026-04-02T00:00:00+00:00",
+                    )
+
+                    classify_company = self.insert_company(connection, "Classify Co")
+                    classify_job = self.insert_job(connection, classify_company)
+                    self.insert_action(
+                        connection,
+                        classify_company,
+                        job_id=classify_job,
+                        queue="classify",
+                        kind="classify_outcome",
+                        due_at="2026-04-03T00:00:00+00:00",
+                    )
+
+                    old_apply_company = self.insert_company(connection, "Old Apply Co")
+                    old_apply_job = self.insert_job(connection, old_apply_company)
+                    old_apply_action = self.insert_action(
+                        connection,
+                        old_apply_company,
+                        job_id=old_apply_job,
+                        queue="apply",
+                        kind="apply",
+                    )
+                    connection.execute(
+                        """
+                        UPDATE actions
+                        SET created_at = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            "2026-04-01T00:00:00+00:00",
+                            "2026-04-01T00:00:00+00:00",
+                            old_apply_action,
+                        ),
+                    )
+
+                    mismatch_company = self.insert_company(connection, "Mismatch Co")
+                    mismatch_job = self.insert_job(connection, mismatch_company)
+                    self.insert_event(
+                        connection,
+                        mismatch_company,
+                        job_id=mismatch_job,
+                        event_type="rejection_received",
+                        happened_at="2026-04-04T00:00:00+00:00",
+                    )
+
+                    rejected_company = self.insert_company(connection, "Rejected Co")
+                    rejected_job = self.insert_job(connection, rejected_company)
+                    connection.execute(
+                        "UPDATE jobs SET status = 'rejected' WHERE id = ?",
+                        (rejected_job,),
+                    )
+                    self.insert_event(
+                        connection,
+                        rejected_company,
+                        job_id=rejected_job,
+                        event_type="rejection_received",
+                        happened_at="2026-04-05T00:00:00+00:00",
+                    )
+
+                    pending_company = self.insert_company(connection, "Pending Co")
+                    pending_job = self.insert_job(connection, pending_company)
+                    connection.execute(
+                        "UPDATE jobs SET status = 'applied' WHERE id = ?",
+                        (pending_job,),
+                    )
+                    self.insert_event(
+                        connection,
+                        pending_company,
+                        job_id=pending_job,
+                        event_type="application_submitted",
+                        happened_at="2026-04-06T00:00:00+00:00",
+                    )
+
+                    event_only_company = self.insert_company(connection, "Event Only Co")
+                    event_only_job = self.insert_job(connection, event_only_company)
+                    self.insert_event(
+                        connection,
+                        event_only_company,
+                        job_id=event_only_job,
+                        event_type="application_submitted",
+                        happened_at="2026-04-07T00:00:00+00:00",
+                    )
+
+                    future_company = self.insert_company(connection, "Future Co")
+                    future_job = self.insert_job(connection, future_company)
+                    connection.execute(
+                        "UPDATE jobs SET status = 'rejected' WHERE id = ?",
+                        (future_job,),
+                    )
+                    self.insert_event(
+                        connection,
+                        future_company,
+                        job_id=future_job,
+                        event_type="rejection_received",
+                        happened_at="2026-05-03T00:00:00+00:00",
+                    )
+
+                    offset_future_company = self.insert_company(connection, "Offset Future Co")
+                    offset_future_job = self.insert_job(connection, offset_future_company)
+                    connection.execute(
+                        "UPDATE jobs SET status = 'rejected' WHERE id = ?",
+                        (offset_future_job,),
+                    )
+                    self.insert_event(
+                        connection,
+                        offset_future_company,
+                        job_id=offset_future_job,
+                        event_type="rejection_received",
+                        happened_at="2026-05-01T20:00:00-07:00",
+                    )
+
+                    cooldown_company = self.insert_company(connection, "Cooldown Co")
+                    connection.execute(
+                        """
+                        UPDATE companies
+                        SET status = 'cooldown',
+                            cooldown_until = '2026-06-01T00:00:00+00:00'
+                        WHERE id = ?
+                        """,
+                        (cooldown_company,),
+                    )
+                    self.insert_event(
+                        connection,
+                        cooldown_company,
+                        event_type="note",
+                        happened_at="2026-05-01T00:00:00+00:00",
+                    )
+
+                    quiet_company = self.insert_company(connection, "Quiet Co")
+                    self.insert_event(
+                        connection,
+                        quiet_company,
+                        event_type="note",
+                        happened_at="2026-05-01T00:00:00+00:00",
+                    )
+                    before_counts = connection.execute(
+                        """
+                        SELECT
+                            (SELECT COUNT(*) FROM companies),
+                            (SELECT COUNT(*) FROM jobs),
+                            (SELECT COUNT(*) FROM actions),
+                            (SELECT COUNT(*) FROM events)
+                        """
+                    ).fetchone()
+
+            result = self.run_cli(
+                db_path,
+                "report",
+                "hygiene",
+                "--as-of",
+                "2026-05-02T00:00:00+00:00",
+            )
+
+            with closing(self.connect(db_path)) as connection:
+                after_counts = connection.execute(
+                    """
+                    SELECT
+                        (SELECT COUNT(*) FROM companies),
+                        (SELECT COUNT(*) FROM jobs),
+                        (SELECT COUNT(*) FROM actions),
+                        (SELECT COUNT(*) FROM events)
+                    """
+                ).fetchone()
+
+            self.assertEqual(before_counts, after_counts)
+            self.assertIn("Hygiene report as_of=2026-05-02T00:00:00+00:00", result.stdout)
+            self.assertIn("Stale actions:", result.stdout)
+            self.assertIn("queue=apply", result.stdout)
+            self.assertIn("queue=follow_up", result.stdout)
+            self.assertIn("queue=classify", result.stdout)
+            self.assertIn("age_state=old_unscheduled", result.stdout)
+            self.assertIn("Old Apply Co", result.stdout)
+            self.assertIn("job=#", result.stdout)
+            self.assertIn("Outcome gaps:", result.stdout)
+            self.assertIn("issue=rejection_event_status_mismatch", result.stdout)
+            self.assertIn("issue=unclassified_rejection", result.stdout)
+            self.assertIn("issue=pending_final_disposition", result.stdout)
+            self.assertIn("issue=application_submitted_status_mismatch", result.stdout)
+            self.assertIn("Event Only Co", result.stdout)
+            self.assertNotIn("Future Co", result.stdout)
+            self.assertNotIn("Offset Future Co", result.stdout)
+            self.assertIn("Companies with recent activity and no next action:", result.stdout)
+            self.assertIn("company=#", result.stdout)
+            self.assertIn("Quiet Co", result.stdout)
+            self.assertNotIn("Cooldown Co", result.stdout)
+
+    def test_report_hygiene_handles_no_data_and_all_clean_states(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            no_data = self.run_cli(db_path, "report", "hygiene")
+            self.assertIn("No command center data.", no_data.stdout)
+
+            self.run_cli(db_path, "company", "add", "Clean Co")
+            all_clean = self.run_cli(
+                db_path,
+                "report",
+                "hygiene",
+                "--as-of",
+                "2026-05-02T00:00:00+00:00",
+            )
+
+            self.assertIn(
+                "All clean: no stale actions, outcome gaps, or active companies "
+                "without next action.",
+                all_clean.stdout,
+            )
+
+    def test_report_hygiene_does_not_migrate_old_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    connection.execute("DROP TABLE query_run_results")
+                    connection.execute("DROP TABLE query_runs")
+                    connection.execute("DELETE FROM schema_migrations WHERE version = 4")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "report",
+                    "hygiene",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            with closing(self.connect(db_path)) as connection:
+                version = connection.execute(
+                    "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
+                ).fetchone()[0]
+                query_runs_exists = connection.execute(
+                    """
+                    SELECT 1
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'query_runs'
+                    """
+                ).fetchone()
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("run init before reporting", result.stderr)
+            self.assertEqual(version, 3)
+            self.assertIsNone(query_runs_exists)
 
     def test_action_next_includes_execution_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
