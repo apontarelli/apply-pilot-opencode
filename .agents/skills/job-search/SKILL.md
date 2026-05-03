@@ -1,11 +1,15 @@
 ---
 name: job-search
-description: Use when the user wants to search LinkedIn for jobs, validate whether a role is worth applying to, normalize a LinkedIn job post into reusable JD text, or gather light company and people context before invoking $job-apply. Keep this as a read-only intake layer; do not message people or submit applications.
+description: Use when the user wants to search LinkedIn or other job sources, validate whether a specific role is worth applying to, normalize a job post into reusable JD text, screen a target-company role, or gather light company and people context before invoking $job-apply. For daily queue operation, status, metrics, outcomes, stale actions, or command-center hygiene, use $career-command-center. Keep this as an intake layer; do not message people or submit applications.
 ---
 
 # Job Search
 
-Use this skill for LinkedIn-backed discovery, validation, and JD intake before application work starts.
+Use this skill for discovery, validation, screening, and JD intake before
+application work starts.
+
+Use `$career-command-center` instead when the user wants daily queue operation,
+status, metrics, outcomes, stale actions, or command-center hygiene.
 
 ## Goals
 
@@ -52,7 +56,7 @@ discovery path.
 
 Exception packs such as `ACCESS`, `PAYMENTS_INSURANCE_CRYPTO_TRUST`, and `INDUSTRIAL_AUTONOMY_BRIDGE` require `--reason` on broad query runs. Do not treat them as default lanes.
 
-Use `scripts/job_search.py` as the cross-session command center:
+Use `scripts/job_search.py` to check history and record search decisions:
 - `python3 scripts/job_search.py init` if `status` says the database is not initialized
 - `python3 scripts/job_search.py status`
 - `python3 scripts/job_search.py company import --file <researched-companies.json>`
@@ -373,7 +377,11 @@ Do not add new SQLite schema for these fields until repeated usage proves it is 
 
 ## Target Company Research
 
-Use this flow when the user wants to add companies to the target list or vet whether the current list is strong enough.
+Use this flow when the user wants to add companies to the target list, find
+role/source opportunities, or vet a company from external research.
+
+Use `$career-command-center` for ongoing queue operation, stale-action cleanup,
+metrics, and state hygiene around already-tracked companies.
 
 1. Start from command-center reality:
    - `status`

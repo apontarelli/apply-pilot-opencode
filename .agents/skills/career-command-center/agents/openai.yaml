@@ -1,0 +1,4 @@
+interface:
+  display_name: "Career Command Center"
+  short_description: "Run the daily job-search operator loop."
+  default_prompt: "Use $career-command-center to inspect status, review next actions, and decide the next job-search move from current command-center state."

@@ -185,11 +185,11 @@ Duplicate rules:
 
 ## Broad Job-Board Query Strategy
 
-SID-100 chose a hybrid strategy: source-gated query packs.
+The broad-search strategy is source-gated query packs.
 
 Broad job-board APIs are secondary/backlog. Do not make SerpApi, JSearch,
-DataForSEO, Adzuna, or another broad API the default discovery backbone unless a
-future ticket explicitly changes that posture.
+DataForSEO, Adzuna, or another broad API the default discovery backbone unless
+the product strategy explicitly changes that posture.
 
 Use two repeatable discovery motions:
 
@@ -251,7 +251,7 @@ Noisy broad results:
 
 ## LinkedIn MCP Adapter Decision
 
-SID-103 chose a hybrid adapter boundary:
+LinkedIn MCP uses a hybrid adapter boundary:
 
 - Codex invokes LinkedIn MCP tools.
 - `scripts/job_search.py` remains the deterministic SQLite control layer.
@@ -284,8 +284,8 @@ Failure classes for `linkedin_mcp` query runs:
 - `detail_validation_failed`: `get_job_details` or the canonical posting contradicts the search result; reject affected rows.
 - `partial_results`: catch-all for interrupted runs with enough normalized rows to review; record as `partial` with the more specific cause in notes.
 
-SID-104 implements this handoff as a local helper layered over the SID-101
-query-run import support and SID-102 machine-readable query packs.
+This handoff is implemented as a local helper layered over query-run import
+support and machine-readable query packs.
 
 ## LinkedIn MCP Handoff
 

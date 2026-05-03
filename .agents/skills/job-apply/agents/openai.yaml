@@ -1,4 +1,4 @@
 interface:
   display_name: "Job Apply"
-  short_description: "Route ready JDs to the right resume lane and draft answers."
-  default_prompt: "Use $job-apply on a pasted or normalized JD to choose the best resume lane, decide whether to apply, and draft concise truthful answers."
+  short_description: "Route ready JDs and draft application materials."
+  default_prompt: "Use $job-apply on a pasted, saved, or normalized JD to choose the best resume lane, decide whether to apply, and draft concise truthful answers."

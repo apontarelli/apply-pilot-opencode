@@ -62,6 +62,7 @@ Use the full operating guide for command examples:
 - `scripts/linkedin_mcp_query_handoff.py`: local LinkedIn MCP result normalizer.
 - `APPLICATIONS/_ops/job_search.sqlite`: command-center database.
 - `APPLICATIONS/READY_TO_APPLY/`: saved high-signal application packages.
+- `.agents/skills/career-command-center/`: daily command-center operator loop.
 - `.agents/skills/job-search/`: live discovery, LinkedIn intake, and role screening.
 - `.agents/skills/job-apply/`: ready-JD application routing and answer drafting.
 - `YOUR_PROFILE/`: durable profile, proof library, career strategy, answer guidance, and base resume lanes.

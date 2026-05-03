@@ -10,6 +10,7 @@ Primary docs:
 - `docs/HOW_IT_WORKS.md` - implemented command-center model, operator workflow, CLI behavior, SQLite state, polling, LinkedIn handoff, and validation
 - `docs/README.md` - docs map and source-of-truth boundaries
 - `config/job_search_query_packs.json` - machine-readable query-pack registry
+- `.agents/skills/career-command-center/SKILL.md` - daily command-center operator workflow
 - `.agents/skills/job-search/SKILL.md` - live discovery, LinkedIn intake, and role screening workflow
 - `.agents/skills/job-apply/SKILL.md` - ready-JD application routing and answer drafting workflow
 
@@ -38,6 +39,10 @@ Start every job-search session with the command center:
 python3 scripts/job_search.py status
 python3 scripts/job_search.py action next
 ```
+
+Use `$career-command-center` for daily queue operation, command-center hygiene,
+metrics, outcomes, stale actions, and deciding what to do next from existing
+state.
 
 For current commands, polling, query packs, LinkedIn handoff, and validation,
 use `docs/HOW_IT_WORKS.md`.

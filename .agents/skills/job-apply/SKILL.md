@@ -1,11 +1,15 @@
 ---
 name: job-apply
-description: Use when the user already has a live job description and wants the best resume lane, a pass/apply call, cover-letter guidance, or concise application answers grounded in this repo's existing materials. Prefer existing base resumes over bespoke rewrites. For LinkedIn search, validation, or URL intake, use $job-search first.
+description: Use when the user already has a live job description, saved JD.md, or $job-search handoff and wants the best resume lane, a pass/apply call, cover-letter guidance, saved application package, or concise application answers grounded in this repo's existing materials. Prefer existing base resumes over bespoke rewrites. For LinkedIn search, validation, or URL intake, use $job-search first. For daily queue operation, outcomes, metrics, or command-center hygiene, use $career-command-center.
 ---
 
 # Job Apply
 
 Use this skill for live application routing and answer drafting once the JD is already in hand.
+
+Use `$career-command-center` instead when the user wants daily queue operation,
+outcome hygiene, metrics, stale actions, or deciding what command-center work to
+do next.
 
 ## Goals
 

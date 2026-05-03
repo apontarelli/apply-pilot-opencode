@@ -1,4 +1,4 @@
 interface:
   display_name: "Job Search"
-  short_description: "Batch-screen LinkedIn roles, log them, and hand off strong fits."
-  default_prompt: "Use $job-search to batch-screen LinkedIn roles, log each decision, and hand strong fits to $job-apply."
+  short_description: "Search, screen, normalize, and log roles."
+  default_prompt: "Use $job-search to find or validate roles, log each decision, and hand strong fits to $job-apply."
