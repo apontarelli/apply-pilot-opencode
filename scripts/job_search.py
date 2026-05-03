@@ -10,7 +10,7 @@ import sqlite3
 import sys
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlsplit, urlunsplit
 from urllib.error import HTTPError, URLError
@@ -24,6 +24,7 @@ QUERY_PACK_REGISTRY_PATH = REPO_ROOT / "config" / "job_search_query_packs.json"
 SCHEMA_VERSION = 4
 OPEN_ACTION_STATUSES = ("queued", "in_progress", "blocked", "rescheduled")
 TERMINAL_ACTION_STATUSES = ("done", "skipped")
+ACTION_QUEUES = ("screen", "apply", "follow_up", "research", "artifact", "classify")
 ATS_TYPES = ("greenhouse", "lever", "ashby")
 QUERY_SOURCES = (
     "linkedin_mcp",
@@ -690,6 +691,32 @@ def add_business_days(start: datetime, days: int) -> datetime:
 
 def parse_utc(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def parse_due_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return parse_utc(value).date()
+    except ValueError:
+        try:
+            return datetime.fromisoformat(value).date()
+        except ValueError:
+            return None
+
+
+def due_state(due_at: str | None, *, today: date | None = None) -> str:
+    if not due_at:
+        return "unscheduled"
+    today = today or datetime.now(timezone.utc).date()
+    due_date = parse_due_date(due_at)
+    if due_date is None:
+        return "scheduled"
+    if due_date < today:
+        return "stale"
+    if due_date == today:
+        return "due_today"
+    return "upcoming"
 
 
 def company_name_key(name: str) -> str:
@@ -1536,6 +1563,110 @@ def read_status(db_path: Path) -> dict[str, int | str]:
         "companies": companies,
         "jobs": jobs,
         "actions": actions,
+    }
+
+
+def read_daily_status(db_path: Path) -> dict[str, object]:
+    today = datetime.now(timezone.utc).date()
+    recent_since = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    stale_check_before = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+
+    with closing(connect(db_path)) as connection:
+        open_actions = connection.execute(
+            f"""
+            SELECT queue, due_at, COUNT(*) AS count
+            FROM actions
+            WHERE {open_action_where_clause('actions')}
+            GROUP BY queue, due_at
+            """
+        ).fetchall()
+        job_statuses = connection.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM jobs
+            WHERE status NOT IN ('ignored_by_filter', 'closed', 'archived')
+            GROUP BY status
+            """
+        ).fetchall()
+        recent_outcomes = connection.execute(
+            """
+            SELECT event_type, COUNT(*) AS count
+            FROM events
+            WHERE happened_at >= ?
+                AND event_type IN (
+                    'application_submitted',
+                    'interview',
+                    'rejection_received',
+                    'status_changed'
+                )
+            GROUP BY event_type
+            ORDER BY event_type
+            """,
+            (recent_since,),
+        ).fetchall()
+        target_coverage = connection.execute(
+            """
+            SELECT
+                COUNT(*) AS active_companies,
+                SUM(CASE WHEN active_sources.company_id IS NOT NULL THEN 1 ELSE 0 END)
+                    AS with_active_sources,
+                SUM(
+                    CASE
+                        WHEN active_sources.company_id IS NULL
+                            AND (companies.career_url IS NULL OR companies.career_url = '')
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS needs_source,
+                SUM(
+                    CASE
+                        WHEN companies.last_checked_at IS NULL
+                            OR companies.last_checked_at < ?
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS stale_checks
+            FROM companies
+            LEFT JOIN (
+                SELECT DISTINCT company_id
+                FROM company_sources
+                WHERE status = 'active'
+            ) AS active_sources ON active_sources.company_id = companies.id
+            WHERE companies.status IN ('active', 'watch')
+            """,
+            (stale_check_before,),
+        ).fetchone()
+
+    queue_counts = {queue: 0 for queue in ACTION_QUEUES}
+    stale_actions = 0
+    due_today_actions = 0
+    unscheduled_actions = 0
+    for row in open_actions:
+        queue_counts[row["queue"]] += row["count"]
+        state = due_state(row["due_at"], today=today)
+        if state == "stale":
+            stale_actions += row["count"]
+        elif state == "due_today":
+            due_today_actions += row["count"]
+        elif state == "unscheduled":
+            unscheduled_actions += row["count"]
+
+    return {
+        "queue_counts": queue_counts,
+        "open_action_count": sum(queue_counts.values()),
+        "stale_action_count": stale_actions,
+        "due_today_action_count": due_today_actions,
+        "unscheduled_action_count": unscheduled_actions,
+        "job_status_counts": {row["status"]: row["count"] for row in job_statuses},
+        "recent_outcome_counts": {
+            row["event_type"]: row["count"] for row in recent_outcomes
+        },
+        "target_coverage": {
+            "active_companies": target_coverage["active_companies"] or 0,
+            "with_active_sources": target_coverage["with_active_sources"] or 0,
+            "needs_source": target_coverage["needs_source"] or 0,
+            "stale_checks": target_coverage["stale_checks"] or 0,
+        },
     }
 
 
@@ -2636,13 +2767,49 @@ def format_action(row: sqlite3.Row) -> str:
     return " | ".join(parts)
 
 
+def format_action_next(row: sqlite3.Row) -> str:
+    parts = [format_action(row), f"due_state={due_state(row['due_at'])}"]
+    company_context = [
+        f"status={row['company_status']}",
+        f"tier={row['company_tier'] if row['company_tier'] is not None else 'unset'}",
+    ]
+    if row["company_lanes"]:
+        company_context.append(f"lanes={row['company_lanes']}")
+    if row["company_last_checked_at"]:
+        company_context.append(f"last_checked={row['company_last_checked_at']}")
+    parts.append("company=" + ",".join(company_context))
+    if row["job_id"]:
+        job_context = [f"status={row['job_status']}"]
+        if row["job_fit_score"] is not None:
+            job_context.append(f"fit={row['job_fit_score']}")
+        if row["job_lane"]:
+            job_context.append(f"lane={row['job_lane']}")
+        if row["job_location"]:
+            job_context.append(f"location={row['job_location']}")
+        if row["job_remote_status"]:
+            job_context.append(f"remote={row['job_remote_status']}")
+        parts.append("job_context=" + ",".join(job_context))
+    if row["notes"]:
+        parts.append(f"note={row['notes']}")
+    return " | ".join(parts)
+
+
 def action_rows_query(where_sql: str = "") -> str:
     return f"""
         SELECT
             actions.*,
             companies.name AS company_name,
+            companies.tier AS company_tier,
+            companies.status AS company_status,
+            companies.lanes AS company_lanes,
+            companies.last_checked_at AS company_last_checked_at,
             jobs.title AS job_title,
             jobs.canonical_url AS job_url,
+            jobs.status AS job_status,
+            jobs.fit_score AS job_fit_score,
+            jobs.lane AS job_lane,
+            jobs.location AS job_location,
+            jobs.remote_status AS job_remote_status,
             jobs.recommended_resume AS job_resume,
             jobs.application_folder AS job_application_folder
         FROM actions
@@ -4319,9 +4486,11 @@ def command_action_next(args: argparse.Namespace) -> int:
             params,
         ).fetchall()
     for row in rows:
-        print(format_action(row))
+        print(format_action_next(row))
     if not rows:
-        print("no actions")
+        scope = f"queue={args.queue}" if args.queue else "all queues"
+        print(f"no actions | no open actions | scope={scope}")
+        print("next_step=add an action, import a query run, or poll a target company")
     return 0
 
 
@@ -4871,7 +5040,8 @@ def command_init(args: argparse.Namespace) -> int:
 
 
 def command_status(args: argparse.Namespace) -> int:
-    status = read_status(Path(args.db_path))
+    db_path = Path(args.db_path)
+    status = read_status(db_path)
     print(
         " | ".join(
             [
@@ -4883,6 +5053,65 @@ def command_status(args: argparse.Namespace) -> int:
             ]
         )
     )
+    daily_status = read_daily_status(db_path)
+    queue_counts = daily_status["queue_counts"]
+    active_queues = [
+        f"{queue}={count}" for queue, count in queue_counts.items() if count
+    ]
+    if active_queues:
+        print(
+            "Open action queues: "
+            + ", ".join(active_queues)
+            + " | "
+            + " | ".join(
+                [
+                    f"stale={daily_status['stale_action_count']}",
+                    f"due_today={daily_status['due_today_action_count']}",
+                    f"unscheduled={daily_status['unscheduled_action_count']}",
+                ]
+            )
+        )
+    else:
+        print("Open action queues: none")
+
+    job_status_counts = daily_status["job_status_counts"]
+    if job_status_counts:
+        ordered_jobs = [
+            f"{status}={job_status_counts[status]}"
+            for status in JOB_STATUSES
+            if status in job_status_counts
+        ]
+        print("Active jobs: " + ", ".join(ordered_jobs))
+    else:
+        print("Active jobs: none")
+
+    recent_outcomes = daily_status["recent_outcome_counts"]
+    if recent_outcomes:
+        print(
+            "Recent outcomes (7d): "
+            + ", ".join(
+                f"{event_type}={recent_outcomes[event_type]}"
+                for event_type in sorted(recent_outcomes)
+            )
+        )
+    else:
+        print("Recent outcomes (7d): none")
+
+    coverage = daily_status["target_coverage"]
+    if coverage["active_companies"]:
+        print(
+            "Target coverage: "
+            + " | ".join(
+                [
+                    f"active_companies={coverage['active_companies']}",
+                    f"with_active_sources={coverage['with_active_sources']}",
+                    f"needs_source={coverage['needs_source']}",
+                    f"stale_checks={coverage['stale_checks']}",
+                ]
+            )
+        )
+    else:
+        print("Target coverage: no active target companies")
     return 0
 
 

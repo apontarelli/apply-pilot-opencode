@@ -122,16 +122,20 @@ class JobSearchDatabaseTests(unittest.TestCase):
         contact_id: int | None = None,
         artifact_id: int | None = None,
         gap_id: int | None = None,
+        queue: str = "apply",
+        kind: str = "apply",
         status: str = "queued",
+        due_at: str | None = None,
         completed_at: str | None = None,
+        notes: str | None = None,
     ) -> int:
         connection.execute(
             """
             INSERT INTO actions(
                 company_id, job_id, contact_id, artifact_id, gap_id, queue, kind,
-                status, completed_at, created_at, updated_at
+                status, due_at, completed_at, notes, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 company_id,
@@ -139,10 +143,12 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 contact_id,
                 artifact_id,
                 gap_id,
-                "apply",
-                "apply",
+                queue,
+                kind,
                 status,
+                due_at,
                 completed_at,
+                notes,
                 NOW,
                 NOW,
             ),
@@ -227,6 +233,10 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertIn("companies=0", status.stdout)
             self.assertIn("jobs=0", status.stdout)
             self.assertIn("actions=0", status.stdout)
+            self.assertIn("Open action queues: none", status.stdout)
+            self.assertIn("Active jobs: none", status.stdout)
+            self.assertIn("Recent outcomes (7d): none", status.stdout)
+            self.assertIn("Target coverage: no active target companies", status.stdout)
 
             with closing(self.connect(db_path)) as connection:
                 migration_count = connection.execute(
@@ -234,6 +244,144 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 ).fetchone()[0]
                 self.assertEqual(migration_count, 4)
             self.assertEqual(db_path.stat().st_mode & 0o777, 0o600)
+
+    def test_status_shows_daily_operator_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_a = self.insert_company(connection, "Company A")
+                    company_b = self.insert_company(connection, "Company B")
+                    connection.execute(
+                        """
+                        UPDATE companies
+                        SET tier = 1, lanes = 'FINTECH', last_checked_at = ?
+                        WHERE id = ?
+                        """,
+                        ("2026-01-01T00:00:00+00:00", company_a),
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO company_sources(
+                            company_id, source_type, source_key, status, created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (company_b, "greenhouse", "company-b", "active", NOW, NOW),
+                    )
+                    job_id = self.insert_job(connection, company_a)
+                    connection.execute(
+                        "UPDATE jobs SET status = 'ready_to_apply' WHERE id = ?",
+                        (job_id,),
+                    )
+                    self.insert_action(
+                        connection,
+                        company_a,
+                        job_id=job_id,
+                        due_at="2026-01-02T00:00:00+00:00",
+                    )
+                    self.insert_action(
+                        connection,
+                        company_a,
+                        job_id=job_id,
+                        kind="prepare_materials",
+                        due_at=JOB_SEARCH.utc_now(),
+                    )
+                    self.insert_action(
+                        connection,
+                        company_b,
+                        queue="research",
+                        kind="poll_sources",
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO events(company_id, job_id, event_type, happened_at, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            company_a,
+                            job_id,
+                            "application_submitted",
+                            JOB_SEARCH.utc_now(),
+                            JOB_SEARCH.utc_now(),
+                        ),
+                    )
+
+            status = self.run_cli(db_path, "status")
+
+            self.assertIn("schema_version=4", status.stdout)
+            self.assertIn("companies=2", status.stdout)
+            self.assertIn("jobs=1", status.stdout)
+            self.assertIn("actions=3", status.stdout)
+            self.assertIn(
+                "Open action queues: apply=2, research=1 | stale=1",
+                status.stdout,
+            )
+            self.assertIn("due_today=1", status.stdout)
+            self.assertIn("unscheduled=1", status.stdout)
+            self.assertIn("Active jobs: ready_to_apply=1", status.stdout)
+            self.assertIn(
+                "Recent outcomes (7d): application_submitted=1", status.stdout
+            )
+            self.assertIn(
+                "Target coverage: active_companies=2 | with_active_sources=1 | "
+                "needs_source=1 | stale_checks=2",
+                status.stdout,
+            )
+
+    def test_action_next_includes_execution_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "Stripe")
+                    connection.execute(
+                        """
+                        UPDATE companies
+                        SET tier = 1, lanes = 'FINTECH', last_checked_at = ?
+                        WHERE id = ?
+                        """,
+                        ("2026-01-01T00:00:00+00:00", company_id),
+                    )
+                    job_id = self.insert_job(connection, company_id)
+                    connection.execute(
+                        """
+                        UPDATE jobs
+                        SET status = 'ready_to_apply',
+                            fit_score = 91,
+                            lane = 'FINTECH',
+                            canonical_url = 'https://example.com/stripe-job',
+                            recommended_resume = 'YOUR_PROFILE/Fintech/FINTECH.md',
+                            application_folder = 'APPLICATIONS/READY_TO_APPLY/Stripe_PM'
+                        WHERE id = ?
+                        """,
+                        (job_id,),
+                    )
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        job_id=job_id,
+                        due_at="2026-01-02T00:00:00+00:00",
+                        notes="Submit base FINTECH package.",
+                    )
+
+            result = self.run_cli(db_path, "action", "next", "--limit", "1")
+
+            self.assertIn("Stripe / Product Lead", result.stdout)
+            self.assertIn("due_state=stale", result.stdout)
+            self.assertIn("company=status=active,tier=1,lanes=FINTECH", result.stdout)
+            self.assertIn(
+                "job_context=status=ready_to_apply,fit=91,lane=FINTECH",
+                result.stdout,
+            )
+            self.assertIn("url=https://example.com/stripe-job", result.stdout)
+            self.assertIn("resume=YOUR_PROFILE/Fintech/FINTECH.md", result.stdout)
+            self.assertIn("materials=APPLICATIONS/READY_TO_APPLY/Stripe_PM", result.stdout)
+            self.assertIn("note=Submit base FINTECH package.", result.stdout)
 
     def test_init_migrates_duplicate_open_actions_before_dedupe_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
