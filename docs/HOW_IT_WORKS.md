@@ -1,6 +1,10 @@
-# Job Search Command Center
+# How It Works
 
-The job-search command center is the durable operating system for active job discovery, screening, application tracking, and outcome history.
+This is the operating source of truth for the current job-search system:
+commands, workflow, SQLite state, polling, LinkedIn handoff, and validation.
+
+Longer-term product direction, problem framing, milestones, and success metrics
+live in [Product Strategy](PRODUCT_STRATEGY.md).
 
 ## Current Shape
 
@@ -310,14 +314,6 @@ python3 scripts/job_search.py query run --source manual_browser --pack ACCESS --
 while enforcing pack guardrails. Durable records are created by `query import`
 after a reviewed source pass or adapter handoff.
 
-## Product Strategy
-
-Longer-term product direction, problem framing, milestones, and success metrics
-live in [Job Search Product Strategy](PRODUCT_STRATEGY.md).
-
-The command-center doc stays focused on the implemented operating model and
-operator workflow.
-
 ## Current Next Work
 
 Tracked in Linear project `Job Search Command Center`:
@@ -329,7 +325,7 @@ Tracked in Linear project `Job Search Command Center`:
 
 ## Validation
 
-Before handoff, run:
+Before handoff, run the deterministic repo gate:
 
 ```bash
 make test
@@ -343,3 +339,6 @@ For command-center changes, include targeted tests around:
 - query-pack validation
 - query-run import/list/show behavior
 - metrics aggregation when touched
+
+Use the manual smoke tests in [manual-smoke-tests/](manual-smoke-tests/) when
+checking command-center workflows by hand.
