@@ -37,6 +37,22 @@ QUERY_SOURCES = (
 SOURCE_STATUSES = ("active", "paused", "archived")
 QUERY_RUN_STATUSES = ("planned", "running", "completed", "failed", "partial")
 QUERY_RESULT_STATUSES = ("pending", "accepted", "rejected", "duplicate")
+ROLE_BUCKET_STATUSES = (
+    "ignored_by_filter",
+    "ready_to_apply",
+    "applied",
+    "interviewing",
+    "rejected",
+    "closed",
+    "archived",
+)
+HIGH_SIGNAL_JOB_STATUSES = ("ready_to_apply", "applied", "interviewing")
+NOISY_QUERY_RESULT_MARKERS = (
+    "search_noisy",
+    "malformed_payload",
+    "stale_or_thin_result",
+    "detail_validation_failed",
+)
 POLL_SCREEN_FIT_SCORE = 75
 POLL_IGNORED_FIT_SCORE = 35
 HTTP_TIMEOUT_SECONDS = 20
@@ -4638,6 +4654,19 @@ def percent(numerator: int, denominator: int) -> str:
     return f"{(numerator / denominator) * 100:.1f}%"
 
 
+def count_noisy_query_results(rows: list[sqlite3.Row]) -> int:
+    count = 0
+    for row in rows:
+        haystack = " ".join(
+            str(row[field]).casefold()
+            for field in ("notes", "duplicate_reason")
+            if row[field]
+        )
+        if any(marker in haystack for marker in NOISY_QUERY_RESULT_MARKERS):
+            count += 1
+    return count
+
+
 def command_metrics(args: argparse.Namespace) -> int:
     db_path = Path(args.db_path)
     require_database(db_path)
@@ -4763,6 +4792,176 @@ def command_metrics(args: argparse.Namespace) -> int:
             """,
             (since_text, until_text),
         ).fetchone()[0]
+        job_status_rows = connection.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM jobs
+            GROUP BY status
+            ORDER BY status
+            """
+        ).fetchall()
+        resolved_jobs = connection.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM jobs
+            WHERE status IN ({", ".join("?" for _ in ROLE_BUCKET_STATUSES)})
+            """,
+            ROLE_BUCKET_STATUSES,
+        ).fetchone()[0]
+        unresolved_jobs = connection.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM jobs
+            WHERE status NOT IN ({", ".join("?" for _ in ROLE_BUCKET_STATUSES)})
+            """,
+            ROLE_BUCKET_STATUSES,
+        ).fetchone()[0]
+        high_signal_jobs = connection.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM jobs
+            WHERE status IN ({", ".join("?" for _ in HIGH_SIGNAL_JOB_STATUSES)})
+            """,
+            HIGH_SIGNAL_JOB_STATUSES,
+        ).fetchone()[0]
+        query_quality = connection.execute(
+            """
+            SELECT
+                COUNT(*) AS results,
+                SUM(CASE WHEN query_run_results.result_status != 'pending' THEN 1 ELSE 0 END)
+                    AS reviewed,
+                SUM(CASE WHEN query_run_results.result_status = 'pending' THEN 1 ELSE 0 END)
+                    AS pending,
+                SUM(CASE WHEN query_run_results.result_status = 'accepted' THEN 1 ELSE 0 END)
+                    AS accepted,
+                SUM(CASE WHEN query_run_results.result_status = 'rejected' THEN 1 ELSE 0 END)
+                    AS rejected,
+                SUM(CASE WHEN query_run_results.result_status = 'duplicate' THEN 1 ELSE 0 END)
+                    AS duplicate
+            FROM query_run_results
+            JOIN query_runs ON query_runs.id = query_run_results.query_run_id
+            WHERE query_run_results.updated_at >= ?
+                AND query_run_results.updated_at < ?
+            """,
+            (since_text, until_text),
+        ).fetchone()
+        accepted_high_signal_results = connection.execute(
+            f"""
+            SELECT COUNT(*) AS accepted,
+                SUM(
+                    CASE
+                        WHEN EXISTS (
+                            SELECT 1
+                            FROM jobs
+                            JOIN companies ON companies.id = jobs.company_id
+                            WHERE jobs.status IN ({", ".join("?" for _ in HIGH_SIGNAL_JOB_STATUSES)})
+                                AND (
+                                    (
+                                        query_run_results.canonical_url IS NOT NULL
+                                        AND jobs.canonical_url = query_run_results.canonical_url
+                                    )
+                                    OR (
+                                        query_run_results.source_job_id IS NOT NULL
+                                        AND jobs.source = query_runs.source
+                                        AND jobs.source_job_id = query_run_results.source_job_id
+                                    )
+                                )
+                        )
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS matched
+            FROM query_run_results
+            JOIN query_runs ON query_runs.id = query_run_results.query_run_id
+            WHERE query_run_results.result_status = 'accepted'
+                AND query_run_results.updated_at >= ?
+                AND query_run_results.updated_at < ?
+            """,
+            (*HIGH_SIGNAL_JOB_STATUSES, since_text, until_text),
+        ).fetchone()
+        noisy_rows = connection.execute(
+            """
+            SELECT query_run_results.notes, query_run_results.raw_payload,
+                query_run_results.duplicate_reason
+            FROM query_run_results
+            JOIN query_runs ON query_runs.id = query_run_results.query_run_id
+            WHERE query_run_results.result_status = 'rejected'
+                AND query_run_results.updated_at >= ?
+                AND query_run_results.updated_at < ?
+            """,
+            (since_text, until_text),
+        ).fetchall()
+        stale_action_rows = connection.execute(
+            f"""
+            SELECT queue, COUNT(*) AS count
+            FROM actions
+            WHERE {open_action_where_clause('actions')}
+                AND due_at IS NOT NULL
+                AND date(due_at) < date(?)
+            GROUP BY queue
+            ORDER BY queue
+            """,
+            (until_text,),
+        ).fetchall()
+        open_actions = connection.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM actions
+            WHERE {open_action_where_clause('actions')}
+            """
+        ).fetchone()[0]
+        target_coverage = connection.execute(
+            f"""
+            SELECT
+                COUNT(*) AS active_targets,
+                SUM(CASE WHEN active_sources.company_id IS NOT NULL THEN 1 ELSE 0 END)
+                    AS with_active_sources,
+                SUM(CASE WHEN active_sources.company_id IS NULL THEN 1 ELSE 0 END)
+                    AS missing_active_sources,
+                SUM(
+                    CASE
+                        WHEN active_sources.company_id IS NULL
+                            AND (companies.career_url IS NULL OR companies.career_url = '')
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS missing_source_details,
+                SUM(
+                    CASE
+                        WHEN active_sources.company_id IS NULL
+                            AND companies.career_url IS NOT NULL
+                            AND companies.career_url != ''
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS official_fallback_only,
+                SUM(
+                    CASE
+                        WHEN companies.ats_type IS NOT NULL
+                            AND companies.ats_type != ''
+                            AND lower(companies.ats_type) NOT IN ({", ".join("?" for _ in ATS_TYPES)})
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS unsupported_sources,
+                SUM(
+                    CASE
+                        WHEN companies.last_checked_at IS NULL
+                            OR companies.last_checked_at < ?
+                        THEN 1
+                        ELSE 0
+                    END
+                ) AS stale_checks
+            FROM companies
+            LEFT JOIN (
+                SELECT DISTINCT company_id
+                FROM company_sources
+                WHERE status = 'active'
+            ) AS active_sources ON active_sources.company_id = companies.id
+            WHERE companies.status IN ('active', 'watch')
+            """,
+            (*ATS_TYPES, (until - timedelta(days=14)).isoformat()),
+        ).fetchone()
         average_days = connection.execute(
             """
             SELECT AVG(julianday(events.happened_at) - julianday(jobs.created_at))
@@ -4778,6 +4977,28 @@ def command_metrics(args: argparse.Namespace) -> int:
     lane_summary = ", ".join(
         f"{row['lane']}:{row['count']}" for row in applications_by_lane
     ) or "none"
+    status_summary = ", ".join(
+        f"{row['status']}:{row['count']}" for row in job_status_rows
+    ) or "none"
+    stale_by_queue = ", ".join(
+        f"{row['queue']}:{row['count']}" for row in stale_action_rows
+    ) or "none"
+    query_results = query_quality["results"] or 0
+    query_reviewed = query_quality["reviewed"] or 0
+    query_accepted = query_quality["accepted"] or 0
+    query_rejected = query_quality["rejected"] or 0
+    query_duplicate = query_quality["duplicate"] or 0
+    query_pending = query_quality["pending"] or 0
+    accepted_result_count = accepted_high_signal_results["accepted"] or 0
+    matched_high_signal_results = accepted_high_signal_results["matched"] or 0
+    noisy_rejected = count_noisy_query_results(noisy_rows)
+    target_active = target_coverage["active_targets"] or 0
+    target_with_sources = target_coverage["with_active_sources"] or 0
+    target_missing_sources = target_coverage["missing_active_sources"] or 0
+    target_missing_details = target_coverage["missing_source_details"] or 0
+    target_fallback_only = target_coverage["official_fallback_only"] or 0
+    target_unsupported = target_coverage["unsupported_sources"] or 0
+    target_stale_checks = target_coverage["stale_checks"] or 0
     print(f"Metrics since={since_text} until={until_text}")
     print(f"jobs_screened={jobs_screened}")
     print(f"applications_submitted={applications_submitted}")
@@ -4788,6 +5009,40 @@ def command_metrics(args: argparse.Namespace) -> int:
     print(f"outreach_response_rate={percent(outreach_responses, messages_sent)}")
     print(f"companies_touched={companies_touched}")
     print(f"actions_completed={actions_completed}")
+    print(
+        "bucket_resolution="
+        f"resolved_jobs={resolved_jobs} unresolved_jobs={unresolved_jobs} "
+        f"resolution_rate={percent(resolved_jobs, resolved_jobs + unresolved_jobs)} "
+        f"statuses={status_summary}"
+    )
+    print(
+        "reviewed_query_results="
+        f"results={query_results} reviewed={query_reviewed} pending={query_pending} "
+        f"accepted={query_accepted} rejected={query_rejected} "
+        f"duplicate={query_duplicate} noisy={noisy_rejected} "
+        f"review_rate={percent(query_reviewed, query_results)}"
+    )
+    print(
+        "accepted_high_signal_roles="
+        f"query_results_accepted={accepted_result_count} "
+        f"matched_high_signal_jobs={matched_high_signal_results} "
+        f"unconverted_accepted_results={accepted_result_count - matched_high_signal_results} "
+        f"ready_or_later_jobs={high_signal_jobs}"
+    )
+    print(
+        "stale_actions="
+        f"open={open_actions} stale={sum(row['count'] for row in stale_action_rows)} "
+        f"by_queue={stale_by_queue}"
+    )
+    print(
+        "target_company_coverage="
+        f"active_targets={target_active} with_active_sources={target_with_sources} "
+        f"missing_active_sources={target_missing_sources} "
+        f"missing_source_details={target_missing_details} "
+        f"official_fallback_only={target_fallback_only} "
+        f"unsupported_sources={target_unsupported} "
+        f"stale_checks={target_stale_checks}"
+    )
     print(
         "average_days_from_discovery_to_application="
         + ("0.0" if average_days is None else f"{average_days:.1f}")

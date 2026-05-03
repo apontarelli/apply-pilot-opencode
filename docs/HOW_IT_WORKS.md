@@ -375,3 +375,26 @@ For command-center changes, include targeted tests around:
 
 Use the manual smoke tests in [manual-smoke-tests/](manual-smoke-tests/) when
 checking command-center workflows by hand.
+
+## Metrics Review
+
+`python3 scripts/job_search.py metrics` is the weekly review surface. The
+existing application and outreach rates remain intact, and Milestone 5 adds
+execution-health lines:
+
+- `bucket_resolution`: counts roles resolved out of raw discovery/screening into
+  an explicit terminal or action bucket. Low resolution rate means screen the
+  backlog or record pass/ready decisions.
+- `reviewed_query_results`: shows broad-source result quality for the window:
+  total, reviewed, pending, accepted, rejected, duplicate, and noisy. High
+  pending means finish review; high noisy/rejected means tune the query pack or
+  source.
+- `accepted_high_signal_roles`: compares accepted broad-source results with
+  roles currently at `ready_to_apply`, `applied`, or `interviewing`. A weak
+  ratio means accepted roles are not converting into real application work.
+- `stale_actions`: counts open actions whose due date is before the review
+  cutoff, plus queue distribution. Use it to clear blocked execution queues.
+- `target_company_coverage`: counts active/watch target companies with active
+  ATS sources, missing active sources, career-page-only fallbacks, unsupported
+  ATS types, and stale checks. Missing or unsupported sources should drive
+  company-source research before broader searching.
