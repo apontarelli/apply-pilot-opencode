@@ -3325,6 +3325,191 @@ class JobSearchDatabaseTests(unittest.TestCase):
             ):
                 self.assertIn(expected, metrics.stdout)
 
+    def test_metrics_reports_funnel_query_quality_and_source_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(
+                db_path,
+                "company",
+                "add",
+                "Stripe",
+                "--career-url",
+                "https://stripe.com/jobs",
+                "--ats-type",
+                "greenhouse",
+            )
+            self.run_cli(
+                db_path,
+                "company",
+                "add",
+                "OpenAI",
+                "--career-url",
+                "https://openai.com/careers",
+            )
+            self.run_cli(
+                db_path,
+                "company",
+                "add",
+                "WorkdayCo",
+                "--ats-type",
+                "workday",
+            )
+            self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Stripe",
+                "Product Lead",
+                "--url",
+                "https://jobs.example.com/stripe/product-lead",
+            )
+            self.run_cli(db_path, "job", "status", "1", "ready_to_apply")
+            self.run_cli(db_path, "job", "add", "OpenAI", "Product Manager")
+            self.run_cli(
+                db_path,
+                "source",
+                "add",
+                "Stripe",
+                "--type",
+                "greenhouse",
+                "--key",
+                "stripe",
+            )
+            payload_path = Path(tmpdir) / "query-run.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "source": "linkedin_mcp",
+                        "pack": "FINTECH",
+                        "query": "senior product manager payroll",
+                        "results": [
+                            {
+                                "company": "Mercury",
+                                "title": "Senior Product Manager",
+                                "url": "https://jobs.example.com/mercury/pm",
+                                "status": "accepted",
+                            },
+                            {
+                                "company": "NoisyCo",
+                                "title": "Product Manager",
+                                "url": "https://jobs.example.com/noisy/pm",
+                                "status": "rejected",
+                                "notes": "search_noisy: people-manager-heavy results",
+                            },
+                            {
+                                "company": "WeakCo",
+                                "title": "Growth Product Manager",
+                                "url": "https://jobs.example.com/weak/growth",
+                                "status": "rejected",
+                                "notes": "consumer growth role",
+                            },
+                            {
+                                "company": "Stripe",
+                                "title": "Product Lead",
+                                "url": "https://jobs.example.com/stripe/product-lead",
+                                "status": "accepted",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.run_cli(db_path, "query", "import", "--file", str(payload_path))
+            self.run_cli(db_path, "company", "add", "Mercury")
+            self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Mercury",
+                "Senior Product Manager",
+                "--url",
+                "https://jobs.example.com/mercury/pm",
+                "--status",
+                "ready_to_apply",
+            )
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    connection.execute(
+                        """
+                        UPDATE query_runs
+                        SET created_at = ?, updated_at = ?
+                        """,
+                        (
+                            "2026-04-01T12:00:00+00:00",
+                            "2026-04-29T12:00:00+00:00",
+                        ),
+                    )
+                    connection.execute(
+                        """
+                        UPDATE query_run_results
+                        SET updated_at = ?
+                        """,
+                        (
+                            "2026-04-29T12:00:00+00:00",
+                        ),
+                    )
+                    connection.execute(
+                        """
+                        UPDATE companies
+                        SET last_checked_at = ?
+                        WHERE name = ?
+                        """,
+                        ("2026-04-01T00:00:00+00:00", "WorkdayCo"),
+                    )
+                    connection.execute(
+                        """
+                        UPDATE companies
+                        SET status = 'archived'
+                        WHERE name = ?
+                        """,
+                        ("Mercury",),
+                    )
+                    connection.execute("UPDATE actions SET status = 'skipped'")
+                    self.insert_action(
+                        connection,
+                        1,
+                        job_id=1,
+                        due_at="2026-04-20T00:00:00+00:00",
+                    )
+
+            metrics = self.run_cli(
+                db_path,
+                "metrics",
+                "--since",
+                "2026-04-20T00:00:00+00:00",
+                "--until",
+                "2026-05-01T00:00:00+00:00",
+            )
+
+            self.assertIn(
+                "bucket_resolution=resolved_jobs=2 unresolved_jobs=1 "
+                "resolution_rate=66.7%",
+                metrics.stdout,
+            )
+            self.assertIn(
+                "reviewed_query_results=results=4 reviewed=4 pending=0 "
+                "accepted=1 rejected=2 duplicate=1 noisy=1 review_rate=100.0%",
+                metrics.stdout,
+            )
+            self.assertIn(
+                "accepted_high_signal_roles=query_results_accepted=1 "
+                "matched_high_signal_jobs=1 unconverted_accepted_results=0 "
+                "ready_or_later_jobs=2",
+                metrics.stdout,
+            )
+            self.assertIn(
+                "stale_actions=open=1 stale=1 by_queue=apply:1",
+                metrics.stdout,
+            )
+            self.assertIn(
+                "target_company_coverage=active_targets=3 with_active_sources=1 "
+                "missing_active_sources=2 missing_source_details=1 "
+                "official_fallback_only=1 unsupported_sources=1 stale_checks=3",
+                metrics.stdout,
+            )
+
     def test_done_message_action_generates_single_follow_up(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "job_search.sqlite"

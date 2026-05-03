@@ -246,10 +246,12 @@ Operational metrics:
 - fewer stale queued actions
 - faster apply-ready handoff after role discovery
 - higher ratio of reviewed query results to accepted high-signal roles
+- lower noisy/rejected broad-source share after query-pack tuning
 
 Strategic metrics:
 
 - stronger target-company coverage
+- fewer active target companies with missing or unsupported source coverage
 - clearer reasons for passes and rejections
 - better resume-lane fit over time
 - more reusable proof gaps identified and closed
