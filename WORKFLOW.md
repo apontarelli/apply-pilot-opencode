@@ -40,6 +40,12 @@ codex:
   turn_sandbox_policy:
     type: workspaceWrite
     networkAccess: true
+profiles:
+  default:
+    delivery:
+      pr_target: main
+    checks: []
+    completion_requirements: []
 ---
 
 You are working on Linear issue `{{ issue.identifier }}`.
@@ -68,6 +74,19 @@ Description:
 No description provided.
 {% endif %}
 
+Resolved workflow policy:
+
+```json
+{{ policy_json }}
+```
+
+## Delivery Target Rules
+
+- Treat `policy.delivery.pr_target` as the Git PR base branch for this run.
+- Project bindings may override the selected profile target with `projects[].pr_target`.
+- If the target is `main`, preserve the normal mainline pull/push/review/land behavior.
+- If the target is not `main`, pull from `origin/<target>`, create or update the PR with base `<target>`, and do not promote that branch to `main` unless repo instructions explicitly define a separate human-approved flow.
+
 ## Operating Rules
 
 1. This is an unattended Symphony orchestration session. Do not ask a human to perform follow-up work.
@@ -95,7 +114,7 @@ Use these global skills when the matching workflow phase is reached:
 - `symphony-commit`: commit or describe completed task changes with validation evidence.
 - `symphony-pull`: sync with latest mainline and resolve conflicts.
 - `symphony-quality-gates`: classify and run required pre-handoff quality gates.
-- `symphony-review`: run the final review pass after validation and quality gates, before push or handoff.
+- `symphony-review`: run automated reviewer subagents and triage findings before handoff.
 - `symphony-push`: publish branch/PR and move ready work to `Human Review`.
 - `symphony-land`: merge approved PRs from `Merging`.
 - `symphony-debug`: investigate stalled or failing Symphony runs.
@@ -144,7 +163,7 @@ If this project uses different Linear state names, adapt to the nearest matching
 6. Implement the smallest coherent change that satisfies the issue.
 7. Run the strongest feasible validation for the touched surface.
 8. Run `symphony-quality-gates` and address required gate findings.
-9. Run `symphony-review` and address required review findings.
+9. Run `symphony-review` with reviewer subagents for non-trivial changes; fix blocking findings and rerun affected validation.
 10. Commit, push, open/update a PR, and attach the PR to the issue when repository tooling and permissions allow.
 11. Move the issue to `Human Review` only when the completion bar is satisfied.
 
@@ -161,7 +180,7 @@ Ticket-provided `Validation`, `Test Plan`, or `Testing` requirements are mandato
 - Workpad plan, acceptance criteria, and validation checklist are accurate and checked off.
 - Required ticket validation has passed or a true blocker is documented.
 - `symphony-quality-gates` passed, or blockers are documented in the workpad.
-- `symphony-review` passed, or required review findings are resolved/documented.
+- `symphony-review` passed, or a human-input-required blocker is documented in the workpad.
 - Relevant tests/checks are green for the latest commit.
 - PR is linked on the issue when changes were made and publishing is available.
 - Reviewer-facing notes are concise and live in the workpad, not scattered across new comments.
@@ -191,12 +210,15 @@ Ticket-provided `Validation`, `Test Plan`, or `Testing` requirements are mandato
 ### Quality Gates
 
 - [ ] Classifier: <summary>
-- [ ] Required gates: <none | test-deslop | document-gardening | deslop | parallel review>
+- [ ] Required gates: <none | test-deslop | document-gardening | deslop | symphony-review>
 - [ ] Evidence: <commands/findings/results>
 
-### Review
+### Automated Review
 
-- [ ] `symphony-review` - findings resolved or documented
+- [ ] Review mode: <subagents | fallback-local-review>
+- [ ] Reviewers: <roles>
+- [ ] Findings: <none | fixed | human-input-required | follow-up>
+- [ ] Decision: <pass | fix-required | human-input-required | blocked>
 
 ### Runtime URLs
 
