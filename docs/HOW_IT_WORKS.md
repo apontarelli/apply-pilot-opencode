@@ -73,6 +73,9 @@ python3 scripts/job_search.py status
 python3 scripts/job_search.py action next
 ```
 
+For a five-minute pre-session and post-session smoke path, use
+[Daily Job Search Smoke Checklist](manual-smoke-tests/daily-job-search.md).
+
 2. For a known company, inspect history before adding work:
 
 ```bash
