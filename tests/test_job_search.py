@@ -1528,7 +1528,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                     """
                     SELECT companies.name, jobs.title, jobs.status, jobs.lane,
                         jobs.recommended_resume, jobs.materials_status,
-                        jobs.application_folder
+                        jobs.application_folder, jobs.application_outcome
                     FROM jobs
                     JOIN companies ON companies.id = jobs.company_id
                     ORDER BY companies.name, jobs.title
@@ -1553,6 +1553,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                     ORDER BY companies.name, jobs.title, events.event_type
                     """
                 ).fetchall()
+                event_notes = [row[3] for row in events if row[3]]
 
             self.assertEqual(
                 jobs,
@@ -1565,12 +1566,14 @@ class JobSearchDatabaseTests(unittest.TestCase):
                         "YOUR_PROFILE/Fintech/FINTECH.md",
                         None,
                         None,
+                        "applied",
                     ),
                     (
                         "Relo Metrics",
                         "Senior Product Manager",
                         "ignored_by_filter",
                         "PASS",
+                        None,
                         None,
                         None,
                         None,
@@ -1583,6 +1586,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                         "YOUR_PROFILE/Fintech/FINTECH.md",
                         "ready",
                         "APPLICATIONS/READY_TO_APPLY/Stripe_PM",
+                        None,
                     ),
                     (
                         "Stripe",
@@ -1592,9 +1596,14 @@ class JobSearchDatabaseTests(unittest.TestCase):
                         "YOUR_PROFILE/Fintech/FINTECH.md",
                         None,
                         None,
+                        None,
                     ),
                 ],
             )
+            self.assertTrue(
+                any("recommendation: low-priority_apply" in note for note in event_notes)
+            )
+            self.assertTrue(any("recommendation: pass" in note for note in event_notes))
             self.assertEqual(
                 actions,
                 [
@@ -2708,7 +2717,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 "--status",
                 "rejected",
                 "--rejection-reason",
-                "No interview",
+                "missing_proof",
             )
 
             with closing(self.connect(db_path)) as connection:
@@ -2723,6 +2732,72 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertEqual(generated[0][:3], ("classify", "classify_outcome", "queued"))
             self.assertEqual(generated[1][:3], ("follow_up", "follow_up", "skipped"))
             self.assertIsNotNone(generated[1][3])
+
+    def test_job_update_accepts_outcome_taxonomy_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Stripe")
+            self.run_cli(db_path, "job", "add", "Stripe", "Product Manager")
+
+            self.run_cli(
+                db_path,
+                "job",
+                "update",
+                "1",
+                "--status",
+                "rejected",
+                "--rejection-reason",
+                "missing_proof",
+                "--application-outcome",
+                "rejected_no_interview",
+            )
+
+            with closing(self.connect(db_path)) as connection:
+                recorded = connection.execute(
+                    """
+                    SELECT status, rejection_reason, application_outcome
+                    FROM jobs
+                    WHERE id = 1
+                    """
+                ).fetchone()
+
+            self.assertEqual(
+                recorded[:],
+                ("rejected", "missing_proof", "rejected_no_interview"),
+            )
+
+    def test_job_update_rejects_non_taxonomy_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Stripe")
+            self.run_cli(db_path, "job", "add", "Stripe", "Product Manager")
+
+            for option, value in (
+                ("--rejection-reason", "vibes"),
+                ("--application-outcome", "maybe_later"),
+            ):
+                with self.subTest(option=option):
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            str(CLI),
+                            "--db-path",
+                            str(db_path),
+                            "job",
+                            "update",
+                            "1",
+                            option,
+                            value,
+                        ],
+                        cwd=REPO_ROOT,
+                        text=True,
+                        capture_output=True,
+                    )
+
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"invalid choice: '{value}'", result.stderr)
 
     def test_no_interview_rejection_creates_company_cooldown(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

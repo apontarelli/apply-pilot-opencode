@@ -37,6 +37,31 @@ QUERY_SOURCES = (
 SOURCE_STATUSES = ("active", "paused", "archived")
 QUERY_RUN_STATUSES = ("planned", "running", "completed", "failed", "partial")
 QUERY_RESULT_STATUSES = ("pending", "accepted", "rejected", "duplicate")
+REJECTION_REASONS = (
+    "role_fit",
+    "timing",
+    "compensation",
+    "level_scope",
+    "recruiter_screen_risk",
+    "stale_or_closed_posting",
+    "duplicate_or_noisy_source",
+    "missing_proof",
+    "unknown",
+)
+APPLICATION_OUTCOMES = (
+    "applied",
+    "no_response",
+    "recruiter_screen",
+    "interview_loop",
+    "offer_received",
+    "offer_accepted",
+    "offer_declined",
+    "withdrawn",
+    "rejected_no_interview",
+    "rejected_after_screen",
+    "rejected_after_loop",
+    "posting_closed",
+)
 ROLE_BUCKET_STATUSES = (
     "ignored_by_filter",
     "ready_to_apply",
@@ -1974,6 +1999,7 @@ def legacy_note(record: dict[str, object]) -> str | None:
     note_parts = []
     for key in (
         "status",
+        "recommendation",
         "summary",
         "why_now",
         "risks",
@@ -1987,6 +2013,15 @@ def legacy_note(record: dict[str, object]) -> str | None:
         if isinstance(value, str) and value.strip():
             note_parts.append(f"{key}: {value.strip()}")
     return "\n".join(note_parts) if note_parts else None
+
+
+def legacy_application_outcome(record: dict[str, object], job_status: str) -> str | None:
+    recommendation = record.get("recommendation")
+    if isinstance(recommendation, str) and recommendation in APPLICATION_OUTCOMES:
+        return recommendation
+    if job_status == "applied":
+        return "applied"
+    return None
 
 
 def ensure_legacy_company(
@@ -2104,7 +2139,7 @@ def import_legacy_record(
             "ready" if material_paths else None,
             legacy_application_folder(record),
             material_paths,
-            record.get("recommendation"),
+            legacy_application_outcome(record, job_status),
             created_at,
             updated_at,
         ),
@@ -5383,8 +5418,8 @@ def add_job_fields(
     parser.add_argument("--application-folder")
     parser.add_argument("--material-paths")
     parser.add_argument("--compensation-signal")
-    parser.add_argument("--rejection-reason")
-    parser.add_argument("--application-outcome")
+    parser.add_argument("--rejection-reason", choices=REJECTION_REASONS)
+    parser.add_argument("--application-outcome", choices=APPLICATION_OUTCOMES)
 
 
 def parse_args() -> argparse.Namespace:
