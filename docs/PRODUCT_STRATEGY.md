@@ -45,7 +45,7 @@ For every serious role or target company, the system should answer:
 - Primary workflow: company-first, queue-based execution.
 - Default discovery lanes: FINTECH / platform PM and AI workflow PM.
 - Exception lanes: ACCESS / trust workflow, payments / insurance / crypto trust, media platform, industrial / autonomy bridge, and other variants only when a specific role or target-company reason warrants them.
-- Application workflow: `$job-search` screens and normalizes roles; `$job-apply` routes ready JDs to the best resume lane and application materials.
+- Skill workflow: `$career-command-center` runs the daily operator loop; `$job-search` screens and normalizes roles; `$job-apply` routes ready JDs to the best resume lane and application materials.
 - Automation posture: manual-first with assistive automation.
 - LinkedIn posture: useful discovery source, never the system of record.
 
@@ -57,6 +57,7 @@ Primary operator:
 
 Secondary operators:
 
+- repo agents using `.agents/skills/career-command-center/` for daily command-center operation
 - repo agents using `.agents/skills/job-search/` for discovery and screening
 - repo agents using `.agents/skills/job-apply/` for application routing and answer drafting
 - future automation jobs that can safely poll, classify, or prepare work without submitting applications
@@ -67,6 +68,29 @@ Non-goal for now:
 - autonomous application submission
 - automated outreach to people
 - making LinkedIn, browser state, or any external job board the canonical store
+
+## Skill Boundaries
+
+The skill map should match the product boundary: command-center operation,
+role discovery, and application preparation are separate surfaces over the same
+durable state.
+
+| Skill | Purpose | Trigger | Non-goals | Handoff |
+| --- | --- | --- | --- | --- |
+| `$career-command-center` | Daily operator loop for command-center state: status, next actions, queue views, company history, follow-ups, research actions, artifacts, gaps, outcomes, metrics, and strategy feedback. | User asks to run the daily loop, inspect or clear queues, review target-company coverage, manage stale actions, summarize funnel health, classify outcomes, or decide what to do next from existing state. | Live LinkedIn/job-board searching, JD normalization, resume routing, application answers, cover letters, submitting applications, or messaging people. | Sends discovery or validation work to `$job-search`; sends ready JD/application-package work to `$job-apply`; records durable state through `scripts/job_search.py`. |
+| `$job-search` | Discovery, screening, validation, and intake for roles or companies before application work starts. Owns LinkedIn/ATS/manual-source intake, query-pack use, detail validation, bucket decisions, and normalized JD packets. | User wants to search for roles, validate a LinkedIn/canonical posting, normalize a job URL or job text, screen a target-company role, or gather light company/people context for a specific opportunity. | Full daily queue operation, long-term outcome hygiene, resume/package drafting, cover letters, application answers, submitting applications, or messaging people. | Writes screened decisions to the command center; hands `ready_to_apply` and `low_effort_apply` JDs to `$job-apply`; routes campaign, proof-gap, watch, and pass outcomes back to command-center actions. |
+| `$job-apply` | Ready-JD application routing: pass/apply call, resume lane selection, concise application answers, selective cover letters, and saved application materials. | User already has a live JD, a saved `JD.md`, or a `$job-search` handoff packet and wants the exact resume, application answers, cover letter guidance, or final apply package. | Discovery/search, LinkedIn URL intake, target-company polling, broad screening, autonomous submission, or outreach. | Updates the command-center ledger with final application state; saves high-signal materials under `APPLICATIONS/READY_TO_APPLY/`; routes unvalidated URLs or unclear roles back to `$job-search`. |
+
+Boundary rules:
+
+- `$career-command-center` owns the daily stateful operating loop.
+- `$job-search` owns pre-application discovery and screening.
+- `$job-apply` owns final automated preparation before Antonio manually
+  submits.
+- SQLite remains the source of truth; skills are operating surfaces over the
+  same command-center state.
+- External side effects remain manual: no autonomous application submission and
+  no automated outreach.
 
 ## Core Product Surfaces
 
@@ -263,6 +287,7 @@ Strategic metrics:
 - Command-center operating model: `docs/HOW_IT_WORKS.md`
 - Query pack registry: `config/job_search_query_packs.json`
 - Query pack prose guidance: `.agents/skills/job-search/references/query-packs.md`
+- Command-center skill: `.agents/skills/career-command-center/SKILL.md`
 - Discovery skill: `.agents/skills/job-search/SKILL.md`
 - Application skill: `.agents/skills/job-apply/SKILL.md`
 - Career strategy: `YOUR_PROFILE/CAREER_STRATEGY.md`

@@ -16,6 +16,6 @@ This directory is the durable documentation map for the job-search system.
 
 ## Exec Plans
 
-Use `docs/exec-plans/` only for active, temporary work slices. After a ticket
+Use `docs/exec-plans/` only for active, temporary work slices. After the work
 lands, move durable decisions into the relevant subject doc and delete the exec
 plan. Git history, Linear, and PRs are the archive.
