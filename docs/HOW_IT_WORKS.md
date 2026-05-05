@@ -126,6 +126,112 @@ and recently active companies that no longer have an open next action. Each row
 includes stable action, job, company, or event IDs needed to resolve the item
 through the normal command paths.
 
+## Outcome Taxonomy Recording
+
+Outcome taxonomy is operating guidance over existing SQLite fields. Do not add a
+new durable product requirement or schema just to classify a role. Use the
+controlled values below in `jobs.application_outcome` and
+`jobs.rejection_reason`; use notes for the specific evidence behind the value.
+
+Exact fields:
+
+- `jobs.status`: lifecycle state, set with `job status` or `job update`.
+- `jobs.application_outcome`: comparable application disposition.
+- `jobs.rejection_reason`: comparable pass or rejection reason.
+- `events.notes`: human-readable evidence, timestamps, or message details.
+- `actions.notes`: queue handoff and completion evidence.
+- `query_run_results.result_status` and `query_run_results.notes`: broad-source
+  result review state and source-quality notes.
+
+Use taxonomy values when the fact should group cleanly in weekly review,
+strategy-feedback reports, or outcome hygiene. Use freeform notes for the
+supporting details: quoted recruiter feedback, comp number, location constraint,
+title filter, source URL, or the exact judgment call.
+
+Application outcome values:
+
+- `pending_response`: submitted, no response yet, and no immediate follow-up
+  decision.
+- `active_interview_loop`: interview process is active.
+- `rejected_before_screen`: rejected, auto-rejected, or went silent before a
+  human screen.
+- `rejected_after_screen`: rejected after recruiter, hiring-manager, or first
+  screen.
+- `rejected_after_interview`: rejected after a deeper interview loop or take-home
+  stage.
+- `closed_before_apply`: posting closed or vanished before Antonio applied.
+- `passed_by_candidate`: Antonio deliberately passed or withdrew.
+- `archived_no_action`: old record archived without a useful market signal.
+
+Rejection and pass reason values:
+
+- `fit_mismatch`: role center of gravity does not map truthfully to current
+  proof.
+- `level_scope_mismatch`: title, seniority, staff/group/director scope, or
+  people-management expectation is wrong.
+- `recruiter_screen_risk`: formal screen likely blocks the story even if the
+  company is interesting.
+- `missing_proof`: good target pattern, but current resume/artifacts lack a
+  reusable proof point.
+- `compensation_mismatch`: disclosed or confirmed comp is below the current bar.
+- `location_or_work_model_mismatch`: geo, remote, hybrid, relocation, or work
+  authorization constraint blocks the role.
+- `timing_or_capacity`: good enough in abstract, but not worth the current queue
+  slot or timing window.
+- `stale_or_closed_posting`: canonical posting is stale, closed, unavailable, or
+  too thin to trust as an active role.
+- `duplicate_or_already_tracked`: duplicate posting, repost, or role already
+  represented by another command-center record.
+- `low_interest`: truthful enough, but not strategically interesting.
+
+Common commands:
+
+```bash
+python3 scripts/job_search.py job update <job_id> --status rejected --application-outcome rejected_before_screen --rejection-reason recruiter_screen_risk
+python3 scripts/job_search.py event add --company "Company" --job-id <job_id> --type rejection_received --notes "Auto-reject after submit; likely PM-years/title screen."
+python3 scripts/job_search.py action done <action_id> --notes "classified outcome=rejected_before_screen reason=recruiter_screen_risk"
+```
+
+For an apply still waiting on a response:
+
+```bash
+python3 scripts/job_search.py job update <job_id> --status applied --application-outcome pending_response
+python3 scripts/job_search.py action done <action_id> --notes "application submitted; outcome=pending_response"
+```
+
+For a screening pass before application:
+
+```bash
+python3 scripts/job_search.py job update <job_id> --status ignored_by_filter --rejection-reason missing_proof
+python3 scripts/job_search.py action done <action_id> --notes "bucket=portfolio_gap reason=missing_proof; needs controls/reporting case study before re-opening"
+```
+
+Classify queue ownership:
+
+- `$career-command-center` owns `classify` actions, outcome hygiene, and weekly
+  cleanup of old `applied`, `interviewing`, `rejected`, `closed`, and
+  `archived` jobs.
+- `$job-search` records screening/pass reasons only when discovery or role
+  validation creates or updates a job. It should hand the final state back to
+  the command center, not own weekly outcome cleanup.
+- `$job-apply` owns ready-JD materials and final apply package guidance. It
+  should report application submission, pass, withdrawal, or rejection facts
+  back through the same `job update`, `event add`, and `action done` paths.
+
+Broad query source-quality boundary:
+
+- Keep `query_run_results.result_status` as review state only: `pending`,
+  `accepted`, `rejected`, or `duplicate`.
+- Keep source-quality reason strings in `query_run_results.notes` until SID-145
+  defines query-pack tuning reports.
+- Use query-result review notes for `search_noisy`, `malformed_payload`,
+  `stale_or_thin_result`, `detail_validation_failed`, and duplicate/noisy
+  broad-source rows.
+- Do not copy broad-source noise into `jobs.rejection_reason` unless the result
+  has already become a command-center job and the same issue is now a real role
+  disposition, such as `stale_or_closed_posting` or
+  `duplicate_or_already_tracked`.
+
 ## Target-Company Polling
 
 Configured target-company polling is source-first.

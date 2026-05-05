@@ -375,6 +375,38 @@ Action conventions:
 
 Do not add new SQLite schema for these fields until repeated usage proves it is needed.
 
+### Screening Outcome Handback
+
+`$job-search` owns discovery and role screening, not ongoing outcome hygiene.
+When screening creates or updates a command-center job, hand the final decision
+back through the existing job fields and notes from `docs/HOW_IT_WORKS.md`:
+
+- `ready_to_apply` or `low_effort_apply`: set `jobs.status=ready_to_apply` and
+  include bucket, `win_now_fit`, `screen_risk`, resume lane, materials path, and
+  next action in notes when no first-class field exists.
+- `pass`: set `jobs.status=ignored_by_filter` and set
+  `jobs.rejection_reason` to the best taxonomy value, such as `fit_mismatch`,
+  `level_scope_mismatch`, `recruiter_screen_risk`, `missing_proof`,
+  `compensation_mismatch`, `location_or_work_model_mismatch`,
+  `timing_or_capacity`, `stale_or_closed_posting`,
+  `duplicate_or_already_tracked`, or `low_interest`.
+- `stretch_warm_path`, `portfolio_gap`, or `watch`: keep the job/company state
+  aligned with the bucket and create only the concrete campaign, artifact, or
+  watch action needed next.
+
+Use taxonomy values for grouping; use notes for the evidence. Examples:
+`reason=missing_proof; bucket=portfolio_gap; needs payroll controls case study`
+or `reason=level_scope_mismatch; director role with people-management screen`.
+Do not set `jobs.application_outcome` for a search-only pass; reserve that field
+for real application or interview dispositions owned by outcome hygiene or
+ready-application work.
+
+Broad-source result quality is not a job rejection taxonomy until the result has
+become a job. Keep `search_noisy`, `malformed_payload`,
+`stale_or_thin_result`, `detail_validation_failed`, duplicate/noisy rows, and
+query-pack tuning observations in `query_run_results.notes` or query-run notes
+until SID-145 defines query-pack tuning reports.
+
 ## Target Company Research
 
 Use this flow when the user wants to add companies to the target list, find
