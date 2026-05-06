@@ -2597,9 +2597,8 @@ def proof_gap_key_and_label(text: str, fallback: str | None = None) -> tuple[str
     if not tokens:
         tokens = ["uncategorized"]
     unique_tokens = list(dict.fromkeys(tokens))
-    key_tokens = unique_tokens[:3]
-    label_tokens = key_tokens
-    return " ".join(key_tokens), " ".join(label_tokens)
+    key_tokens = sorted(unique_tokens[:3])
+    return " ".join(key_tokens), " ".join(unique_tokens[:3])
 
 
 def proof_gap_evidence_from_row(row: sqlite3.Row) -> ProofGapEvidence:
@@ -2841,8 +2840,8 @@ def proof_gap_sort_key(group: ProofGapGroup) -> tuple[int, int, int, str]:
     )
 
 
-def recommend_proof_gap_improvement(group: ProofGapGroup) -> str:
-    haystack = " ".join(
+def proof_gap_haystack(group: ProofGapGroup) -> str:
+    return " ".join(
         join_text_parts(
             item.text,
             item.gap_type,
@@ -2852,6 +2851,15 @@ def recommend_proof_gap_improvement(group: ProofGapGroup) -> str:
         )
         for item in group.evidence
     ).casefold()
+
+
+def proof_gap_has_any(group: ProofGapGroup, tokens: tuple[str, ...]) -> bool:
+    haystack = proof_gap_haystack(group)
+    return any(token in haystack for token in tokens)
+
+
+def recommend_proof_gap_improvement(group: ProofGapGroup) -> str:
+    haystack = proof_gap_haystack(group)
     if any(token in haystack for token in ("resume lane", "lane resume", "resume_lane")):
         return "resume lane"
     if any(
@@ -2859,10 +2867,6 @@ def recommend_proof_gap_improvement(group: ProofGapGroup) -> str:
         for token in ("application answer", "playbook", "interview", "cover letter")
     ):
         return "application playbook"
-    if any(token in haystack for token in ("bullet", "metric", "impact", "quantified")):
-        return "bullet"
-    if any(token in haystack for token in ("profile", "positioning", "headline", "summary")):
-        return "profile"
     if any(
         token in haystack
         for token in ("artifact", "case study", "demo", "portfolio", "memo", "teardown")
@@ -2870,9 +2874,39 @@ def recommend_proof_gap_improvement(group: ProofGapGroup) -> str:
         return "artifact"
     if any(item.action_queue == "artifact" for item in group.evidence):
         return "artifact"
+    if any(token in haystack for token in ("bullet", "metric", "impact", "quantified")):
+        return "bullet"
+    if any(token in haystack for token in ("profile", "positioning", "headline", "summary")):
+        return "profile"
     if group.lanes and len(group.lanes) == 1:
         return "resume lane"
     return "bullet"
+
+
+def proof_gap_routing(group: ProofGapGroup) -> str:
+    if proof_gap_strength(group) == "one_off":
+        return "sqlite"
+    if any(item.action_queue == "artifact" for item in group.evidence):
+        return "linear_candidate"
+    if proof_gap_has_any(
+        group,
+        (
+            "application answer",
+            "artifact",
+            "case study",
+            "cover letter",
+            "demo",
+            "lane resume",
+            "memo",
+            "playbook",
+            "portfolio",
+            "resume lane",
+            "resume_lane",
+            "teardown",
+        ),
+    ):
+        return "linear_candidate"
+    return "sqlite"
 
 
 def format_count_set(values: set[str]) -> str:
@@ -2910,7 +2944,9 @@ def format_proof_gap_evidence(item: ProofGapEvidence) -> str:
 def print_proof_gap_group(index: int, group: ProofGapGroup, evidence_limit: int) -> None:
     print(
         f"{index}. {group.label} | strength={proof_gap_strength(group)} | "
-        f"score={proof_gap_score(group)} | improvement={recommend_proof_gap_improvement(group)}"
+        f"score={proof_gap_score(group)} | "
+        f"improvement={recommend_proof_gap_improvement(group)} | "
+        f"routing={proof_gap_routing(group)}"
     )
     print(
         f"   evidence={len(group.evidence)} | jobs={len(group.job_ids)} | "
