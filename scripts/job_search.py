@@ -38,30 +38,40 @@ SOURCE_STATUSES = ("active", "paused", "archived")
 QUERY_RUN_STATUSES = ("planned", "running", "completed", "failed", "partial")
 QUERY_RESULT_STATUSES = ("pending", "accepted", "rejected", "duplicate")
 REJECTION_REASONS = (
-    "role_fit",
-    "timing",
-    "compensation",
-    "level_scope",
+    "fit_mismatch",
+    "level_scope_mismatch",
     "recruiter_screen_risk",
-    "stale_or_closed_posting",
-    "duplicate_or_noisy_source",
     "missing_proof",
-    "unknown",
+    "compensation_mismatch",
+    "location_or_work_model_mismatch",
+    "timing_or_capacity",
+    "stale_or_closed_posting",
+    "duplicate_or_already_tracked",
+    "low_interest",
 )
 APPLICATION_OUTCOMES = (
-    "applied",
-    "no_response",
-    "recruiter_screen",
-    "interview_loop",
-    "offer_received",
-    "offer_accepted",
-    "offer_declined",
-    "withdrawn",
-    "rejected_no_interview",
+    "pending_response",
+    "active_interview_loop",
+    "rejected_before_screen",
     "rejected_after_screen",
-    "rejected_after_loop",
-    "posting_closed",
+    "rejected_after_interview",
+    "closed_before_apply",
+    "passed_by_candidate",
+    "archived_no_action",
 )
+LEGACY_APPLICATION_OUTCOME_MAP = {
+    "applied": "pending_response",
+    "no_response": "pending_response",
+    "recruiter_screen": "active_interview_loop",
+    "interview_loop": "active_interview_loop",
+    "offer_received": "active_interview_loop",
+    "offer_accepted": "active_interview_loop",
+    "withdrawn": "passed_by_candidate",
+    "offer_declined": "passed_by_candidate",
+    "rejected_no_interview": "rejected_before_screen",
+    "rejected_after_loop": "rejected_after_interview",
+    "posting_closed": "closed_before_apply",
+}
 ROLE_BUCKET_STATUSES = (
     "ignored_by_filter",
     "ready_to_apply",
@@ -2019,8 +2029,15 @@ def legacy_application_outcome(record: dict[str, object], job_status: str) -> st
     recommendation = record.get("recommendation")
     if isinstance(recommendation, str) and recommendation in APPLICATION_OUTCOMES:
         return recommendation
+    if (
+        isinstance(recommendation, str)
+        and recommendation in LEGACY_APPLICATION_OUTCOME_MAP
+    ):
+        return LEGACY_APPLICATION_OUTCOME_MAP[recommendation]
     if job_status == "applied":
-        return "applied"
+        return "pending_response"
+    if job_status == "interviewing":
+        return "active_interview_loop"
     return None
 
 
