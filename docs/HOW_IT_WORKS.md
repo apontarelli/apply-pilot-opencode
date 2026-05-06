@@ -200,10 +200,15 @@ does not edit `config/job_search_query_packs.json`.
 
 ## Outcome Taxonomy Recording
 
-Outcome taxonomy is operating guidance over existing SQLite fields. Do not add a
-new durable product requirement or schema just to classify a role. Use the
-controlled values below in `jobs.application_outcome` and
-`jobs.rejection_reason`; use notes for the specific evidence behind the value.
+Outcome taxonomy is operating guidance over existing SQLite outcome/rejection
+fields. Do not add a new durable product requirement or schema just to classify
+an outcome or rejection reason. Use the controlled values below in
+`jobs.application_outcome` and `jobs.rejection_reason`; use notes for the
+specific evidence behind the value.
+
+Role screening buckets are a separate decision model. Keep bucket decisions in
+job/action notes until first-class bucket schema and reporting lands through the
+accepted SID-180 follow-up.
 
 Exact fields:
 
@@ -294,8 +299,9 @@ Broad query source-quality boundary:
 
 - Keep `query_run_results.result_status` as review state only: `pending`,
   `accepted`, `rejected`, or `duplicate`.
-- Keep source-quality reason strings in `query_run_results.notes` until SID-145
-  defines query-pack tuning reports.
+- Keep source-quality reason strings in `query_run_results.notes`; use
+  `report query-pack-tuning` as the current review surface for repeated
+  broad-source quality patterns.
 - Use query-result review notes for `search_noisy`, `malformed_payload`,
   `stale_or_thin_result`, `detail_validation_failed`, and duplicate/noisy
   broad-source rows.
@@ -531,12 +537,11 @@ after a reviewed source pass or adapter handoff.
 
 ## Current Next Work
 
-Tracked in Linear project `Job Search Command Center`:
+Tracked follow-up from the Milestone 6 structured-field review:
 
-- Improve daily operator summaries for `status`, `action next`, and queue-specific views.
-- Strengthen metrics around stale actions, outcome hygiene, target-company coverage, and query-run quality.
-- Add more manual smoke tests for source polling, query-run import, and LinkedIn handoff paths.
-- Turn repeated pass/rejection patterns into lane, query-pack, bullet, or artifact recommendations.
+- Add first-class role screening bucket schema and reporting for `ready_to_apply`,
+  `low_effort_apply`, `stretch_warm_path`, `portfolio_gap`, `watch`, and `pass`
+  decisions; until then, keep bucket decisions in job/action notes.
 
 ## Validation
 

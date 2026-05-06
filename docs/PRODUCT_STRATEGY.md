@@ -171,6 +171,11 @@ The product should keep these questions separate:
 2. Can Antonio credibly win it now?
 3. If not now, is it worth building toward?
 
+Current implementation note: bucket decisions are durable operating guidance and
+should be recorded in job/action notes today. First-class bucket schema and
+reporting is the accepted follow-up from the Milestone 6 structured-field
+review, tracked in Linear as SID-180.
+
 ## Milestones
 
 ### Milestone 0: Application Package Generator
@@ -221,7 +226,7 @@ Status: shipped baseline.
 
 ### Milestone 5: Operator-Grade Daily Loop
 
-Status: next product focus.
+Status: shipped baseline.
 
 Goal: make daily execution fast, visible, and hard to forget.
 
