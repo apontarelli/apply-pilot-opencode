@@ -152,6 +152,54 @@ GENERIC_TITLE_TOKENS = {
     "sr",
     "the",
 }
+PROOF_GAP_STOPWORDS = {
+    "about",
+    "after",
+    "against",
+    "application",
+    "artifact",
+    "before",
+    "better",
+    "build",
+    "case",
+    "center",
+    "company",
+    "current",
+    "demonstrate",
+    "evidence",
+    "example",
+    "experience",
+    "for",
+    "from",
+    "gap",
+    "gaps",
+    "has",
+    "impact",
+    "lack",
+    "lacks",
+    "missing",
+    "need",
+    "needed",
+    "needs",
+    "point",
+    "portfolio",
+    "proof",
+    "reason",
+    "resolution",
+    "role",
+    "show",
+    "shows",
+    "specific",
+    "story",
+    "study",
+    "that",
+    "the",
+    "this",
+    "with",
+    "without",
+}
+PROOF_GAP_SEVERITY_SCORE = {"high": 3, "medium": 2, "low": 1}
+PROOF_GAP_SOURCE_SCORE = {"gap": 4, "job": 3, "action": 2, "event": 2}
 
 
 @dataclass(frozen=True)
@@ -224,6 +272,66 @@ class CooldownRecommendation:
     evidence: tuple[CooldownEvidence, ...]
 
 
+@dataclass(frozen=True)
+class ProofGapEvidence:
+    source: str
+    source_id: int
+    company_id: int | None
+    company_name: str | None
+    job_id: int | None
+    job_title: str | None
+    lane: str | None
+    job_status: str | None
+    application_outcome: str | None
+    rejection_reason: str | None
+    gap_type: str | None
+    severity: str | None
+    gap_status: str | None
+    action_queue: str | None
+    action_kind: str | None
+    action_status: str | None
+    event_type: str | None
+    happened_at: str | None
+    text: str
+
+
+@dataclass
+class ProofGapGroup:
+    key: str
+    label: str
+    evidence: list[ProofGapEvidence]
+
+    @property
+    def company_ids(self) -> set[int]:
+        return {
+            item.company_id for item in self.evidence if item.company_id is not None
+        }
+
+    @property
+    def job_ids(self) -> set[int]:
+        return {item.job_id for item in self.evidence if item.job_id is not None}
+
+    @property
+    def lanes(self) -> set[str]:
+        return {item.lane for item in self.evidence if item.lane}
+
+    @property
+    def job_statuses(self) -> set[str]:
+        return {item.job_status for item in self.evidence if item.job_status}
+
+    @property
+    def outcomes(self) -> set[str]:
+        return {
+            item.application_outcome
+            for item in self.evidence
+            if item.application_outcome
+        }
+
+    @property
+    def rejection_reasons(self) -> set[str]:
+        return {
+            item.rejection_reason for item in self.evidence if item.rejection_reason
+        }
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
@@ -2454,6 +2562,371 @@ def format_cooldown_recommendation(recommendation: CooldownRecommendation) -> li
     ]
     lines.extend(format_cooldown_evidence(evidence) for evidence in recommendation.evidence)
     return lines
+
+
+def compact_text(value: str, *, limit: int = 140) -> str:
+    compacted = re.sub(r"\s+", " ", value).strip()
+    if len(compacted) <= limit:
+        return compacted
+    return compacted[: limit - 3].rstrip() + "..."
+
+
+def join_text_parts(*values: object | None) -> str:
+    return " | ".join(
+        str(value).strip() for value in values if str(value or "").strip()
+    )
+
+
+def proof_gap_key_and_label(text: str, fallback: str | None = None) -> tuple[str, str]:
+    tokens = [
+        token
+        for token in re.findall(r"[a-z0-9]+", text.casefold())
+        if len(token) > 2 and token not in PROOF_GAP_STOPWORDS
+    ]
+    if not tokens and fallback:
+        tokens = [
+            token
+            for token in re.findall(r"[a-z0-9]+", fallback.casefold())
+            if len(token) > 2 and token not in PROOF_GAP_STOPWORDS
+        ]
+    if not tokens:
+        tokens = ["uncategorized"]
+    unique_tokens = list(dict.fromkeys(tokens))
+    key_tokens = unique_tokens[:3]
+    label_tokens = key_tokens
+    return " ".join(key_tokens), " ".join(label_tokens)
+
+
+def proof_gap_evidence_from_row(row: sqlite3.Row) -> ProofGapEvidence:
+    return ProofGapEvidence(
+        source=str(row["source"]),
+        source_id=int(row["source_id"]),
+        company_id=int(row["company_id"]) if row["company_id"] is not None else None,
+        company_name=row["company_name"],
+        job_id=int(row["job_id"]) if row["job_id"] is not None else None,
+        job_title=row["job_title"],
+        lane=row["lane"],
+        job_status=row["job_status"],
+        application_outcome=row["application_outcome"],
+        rejection_reason=row["rejection_reason"],
+        gap_type=row["gap_type"],
+        severity=row["severity"],
+        gap_status=row["gap_status"],
+        action_queue=row["action_queue"],
+        action_kind=row["action_kind"],
+        action_status=row["action_status"],
+        event_type=row["event_type"],
+        happened_at=row["happened_at"],
+        text=compact_text(str(row["text"])),
+    )
+
+
+def proof_gap_evidence(connection: sqlite3.Connection) -> list[ProofGapEvidence]:
+    evidence: list[ProofGapEvidence] = []
+    evidence.extend(
+        proof_gap_evidence_from_row(row)
+        for row in connection.execute(
+            """
+            SELECT
+                'gap' AS source,
+                gaps.id AS source_id,
+                COALESCE(gaps.company_id, jobs.company_id) AS company_id,
+                companies.name AS company_name,
+                jobs.id AS job_id,
+                jobs.title AS job_title,
+                jobs.lane,
+                jobs.status AS job_status,
+                jobs.application_outcome,
+                jobs.rejection_reason,
+                gaps.gap_type,
+                gaps.severity,
+                gaps.status AS gap_status,
+                NULL AS action_queue,
+                NULL AS action_kind,
+                NULL AS action_status,
+                NULL AS event_type,
+                gaps.updated_at AS happened_at,
+                TRIM(
+                    gaps.description
+                    || COALESCE(' | resolution_action=' || gaps.resolution_action, '')
+                ) AS text
+            FROM gaps
+            LEFT JOIN jobs ON jobs.id = gaps.job_id
+            LEFT JOIN companies ON companies.id = COALESCE(gaps.company_id, jobs.company_id)
+            WHERE gaps.status IN ('open', 'in_progress')
+            ORDER BY gaps.id
+            """
+        ).fetchall()
+    )
+    evidence.extend(
+        proof_gap_evidence_from_row(row)
+        for row in connection.execute(
+            """
+            SELECT
+                'job' AS source,
+                jobs.id AS source_id,
+                jobs.company_id,
+                companies.name AS company_name,
+                jobs.id AS job_id,
+                jobs.title AS job_title,
+                jobs.lane,
+                jobs.status AS job_status,
+                jobs.application_outcome,
+                jobs.rejection_reason,
+                NULL AS gap_type,
+                NULL AS severity,
+                NULL AS gap_status,
+                NULL AS action_queue,
+                NULL AS action_kind,
+                NULL AS action_status,
+                NULL AS event_type,
+                jobs.updated_at AS happened_at,
+                TRIM(
+                    COALESCE(jobs.artifact_opportunity, '')
+                    || COALESCE(' | discovery=' || jobs.discovery_status, '')
+                    || COALESCE(' | role=' || jobs.title, '')
+                    || COALESCE(' | reason=' || jobs.rejection_reason, '')
+                ) AS text
+            FROM jobs
+            JOIN companies ON companies.id = jobs.company_id
+            WHERE jobs.rejection_reason = 'missing_proof'
+                OR jobs.artifact_opportunity IS NOT NULL
+            ORDER BY jobs.id
+            """
+        ).fetchall()
+    )
+    evidence.extend(
+        proof_gap_evidence_from_row(row)
+        for row in connection.execute(
+            """
+            SELECT
+                'action' AS source,
+                actions.id AS source_id,
+                actions.company_id,
+                companies.name AS company_name,
+                jobs.id AS job_id,
+                jobs.title AS job_title,
+                jobs.lane,
+                jobs.status AS job_status,
+                jobs.application_outcome,
+                jobs.rejection_reason,
+                gaps.gap_type,
+                gaps.severity,
+                gaps.status AS gap_status,
+                actions.queue AS action_queue,
+                actions.kind AS action_kind,
+                actions.status AS action_status,
+                NULL AS event_type,
+                COALESCE(actions.completed_at, actions.updated_at) AS happened_at,
+                TRIM(
+                    COALESCE(actions.notes, '')
+                    || COALESCE(' | gap=' || gaps.description, '')
+                    || COALESCE(' | resolution_action=' || gaps.resolution_action, '')
+                ) AS text
+            FROM actions
+            JOIN companies ON companies.id = actions.company_id
+            LEFT JOIN jobs ON jobs.id = actions.job_id
+            LEFT JOIN gaps ON gaps.id = actions.gap_id
+            WHERE actions.gap_id IS NOT NULL
+                OR lower(COALESCE(actions.notes, '')) LIKE '%missing_proof%'
+                OR lower(COALESCE(actions.notes, '')) LIKE '%proof gap%'
+                OR lower(COALESCE(actions.notes, '')) LIKE '%portfolio_gap%'
+            ORDER BY actions.id
+            """
+        ).fetchall()
+    )
+    evidence.extend(
+        proof_gap_evidence_from_row(row)
+        for row in connection.execute(
+            """
+            SELECT
+                'event' AS source,
+                events.id AS source_id,
+                events.company_id,
+                companies.name AS company_name,
+                jobs.id AS job_id,
+                jobs.title AS job_title,
+                jobs.lane,
+                jobs.status AS job_status,
+                jobs.application_outcome,
+                jobs.rejection_reason,
+                gaps.gap_type,
+                gaps.severity,
+                gaps.status AS gap_status,
+                NULL AS action_queue,
+                NULL AS action_kind,
+                NULL AS action_status,
+                events.event_type,
+                events.happened_at,
+                TRIM(
+                    COALESCE(events.notes, '')
+                    || COALESCE(' | gap=' || gaps.description, '')
+                    || COALESCE(' | resolution_action=' || gaps.resolution_action, '')
+                ) AS text
+            FROM events
+            JOIN companies ON companies.id = events.company_id
+            LEFT JOIN jobs ON jobs.id = events.job_id
+            LEFT JOIN gaps ON gaps.id = events.gap_id
+            WHERE events.gap_id IS NOT NULL
+                OR events.event_type = 'gap_identified'
+                OR lower(COALESCE(events.notes, '')) LIKE '%missing_proof%'
+                OR lower(COALESCE(events.notes, '')) LIKE '%proof gap%'
+                OR lower(COALESCE(events.notes, '')) LIKE '%portfolio_gap%'
+            ORDER BY events.id
+            """
+        ).fetchall()
+    )
+    return [item for item in evidence if item.text]
+
+
+def group_proof_gap_evidence(
+    evidence: list[ProofGapEvidence],
+) -> list[ProofGapGroup]:
+    groups: dict[str, ProofGapGroup] = {}
+    for item in evidence:
+        key, label = proof_gap_key_and_label(item.text, item.gap_type)
+        group = groups.get(key)
+        if group is None:
+            group = ProofGapGroup(key=key, label=label, evidence=[])
+            groups[key] = group
+        group.evidence.append(item)
+    return sorted(groups.values(), key=proof_gap_sort_key)
+
+
+def proof_gap_strength(group: ProofGapGroup) -> str:
+    job_count = len(group.job_ids)
+    company_count = len(group.company_ids)
+    if job_count >= 2 and company_count >= 2:
+        return "recurring"
+    if job_count >= 2:
+        return "repeated_role"
+    if company_count >= 2:
+        return "company_cluster"
+    return "one_off"
+
+
+def proof_gap_score(group: ProofGapGroup) -> int:
+    source_score = sum(
+        PROOF_GAP_SOURCE_SCORE.get(item.source, 1) for item in group.evidence
+    )
+    severity_score = sum(
+        PROOF_GAP_SEVERITY_SCORE.get(item.severity or "", 0)
+        for item in group.evidence
+    )
+    active_gap_score = sum(
+        2 for item in group.evidence if item.gap_status in ("open", "in_progress")
+    )
+    return (
+        len(group.job_ids) * 12
+        + len(group.company_ids) * 8
+        + len(group.evidence) * 3
+        + source_score
+        + severity_score
+        + active_gap_score
+    )
+
+
+def proof_gap_sort_key(group: ProofGapGroup) -> tuple[int, int, int, str]:
+    recurring_rank = 1 if proof_gap_strength(group) == "one_off" else 0
+    return (
+        recurring_rank,
+        -proof_gap_score(group),
+        -len(group.evidence),
+        group.label,
+    )
+
+
+def recommend_proof_gap_improvement(group: ProofGapGroup) -> str:
+    haystack = " ".join(
+        join_text_parts(
+            item.text,
+            item.gap_type,
+            item.action_queue,
+            item.action_kind,
+            item.event_type,
+        )
+        for item in group.evidence
+    ).casefold()
+    if any(token in haystack for token in ("resume lane", "lane resume", "resume_lane")):
+        return "resume lane"
+    if any(
+        token in haystack
+        for token in ("application answer", "playbook", "interview", "cover letter")
+    ):
+        return "application playbook"
+    if any(token in haystack for token in ("bullet", "metric", "impact", "quantified")):
+        return "bullet"
+    if any(token in haystack for token in ("profile", "positioning", "headline", "summary")):
+        return "profile"
+    if any(
+        token in haystack
+        for token in ("artifact", "case study", "demo", "portfolio", "memo", "teardown")
+    ):
+        return "artifact"
+    if any(item.action_queue == "artifact" for item in group.evidence):
+        return "artifact"
+    if group.lanes and len(group.lanes) == 1:
+        return "resume lane"
+    return "bullet"
+
+
+def format_count_set(values: set[str]) -> str:
+    return ",".join(sorted(values)) if values else "none"
+
+
+def format_proof_gap_evidence(item: ProofGapEvidence) -> str:
+    subject = (
+        f"company=#{item.company_id} {item.company_name}"
+        if item.company_id
+        else "company=unknown"
+    )
+    if item.job_id:
+        subject += f" | job=#{item.job_id} {item.job_title}"
+    context = (
+        render_optional("lane", item.lane)
+        + render_optional("status", item.job_status)
+        + render_optional("outcome", item.application_outcome)
+        + render_optional("reason", item.rejection_reason)
+        + render_optional("gap_type", item.gap_type)
+        + render_optional("severity", item.severity)
+        + render_optional("gap_status", item.gap_status)
+        + render_optional("queue", item.action_queue)
+        + render_optional("kind", item.action_kind)
+        + render_optional("action_status", item.action_status)
+        + render_optional("event", item.event_type)
+        + render_optional("at", item.happened_at)
+    )
+    return (
+        f"  - {item.source}=#{item.source_id} | "
+        f"{subject}{context} | text={item.text}"
+    )
+
+
+def print_proof_gap_group(index: int, group: ProofGapGroup, evidence_limit: int) -> None:
+    print(
+        f"{index}. {group.label} | strength={proof_gap_strength(group)} | "
+        f"score={proof_gap_score(group)} | improvement={recommend_proof_gap_improvement(group)}"
+    )
+    print(
+        f"   evidence={len(group.evidence)} | jobs={len(group.job_ids)} | "
+        f"companies={len(group.company_ids)} | lanes={format_count_set(group.lanes)} | "
+        f"statuses={format_count_set(group.job_statuses)} | "
+        f"outcomes={format_count_set(group.outcomes)} | "
+        f"reasons={format_count_set(group.rejection_reasons)}"
+    )
+    for item in sorted(
+        group.evidence,
+        key=lambda evidence: (
+            evidence.source,
+            evidence.company_id or 0,
+            evidence.job_id or 0,
+            evidence.source_id,
+        ),
+    )[:evidence_limit]:
+        print(format_proof_gap_evidence(item))
+    hidden = len(group.evidence) - evidence_limit
+    if hidden > 0:
+        print(f"  - ... {hidden} more evidence rows")
 
 
 def pipeline_status_to_job_status(status: str | None) -> str:
@@ -5739,6 +6212,59 @@ def command_report_cooldowns(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_report_proof_gaps(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_current_database_read_only(db_path)
+    as_of = parse_report_as_of(args.as_of)
+    if args.limit <= 0:
+        raise ValueError("report proof-gaps --limit must be a positive integer")
+    if args.evidence_limit <= 0:
+        raise ValueError("report proof-gaps --evidence-limit must be a positive integer")
+    if args.one_off_limit < 0:
+        raise ValueError("report proof-gaps --one-off-limit must be zero or greater")
+
+    with closing(connect(db_path)) as connection:
+        record_count = command_center_record_count(connection)
+        groups = group_proof_gap_evidence(proof_gap_evidence(connection))
+
+    print(f"Proof gap report as_of={as_of.isoformat()}")
+    print(
+        "Ranking: recurring groups sort above one-off groups; "
+        "score weights jobs, companies, source evidence, severity, and open gaps."
+    )
+    if record_count == 0:
+        print("No command center data.")
+        return 0
+    if not groups:
+        print("No proof gaps found.")
+        return 0
+
+    recurring_groups = [
+        group for group in groups if proof_gap_strength(group) != "one_off"
+    ][: args.limit]
+    one_off_groups = [
+        group for group in groups if proof_gap_strength(group) == "one_off"
+    ][: args.one_off_limit]
+
+    print("Recommendations:")
+    if recurring_groups:
+        for index, group in enumerate(recurring_groups, start=1):
+            print_proof_gap_group(index, group, args.evidence_limit)
+    else:
+        print("- none")
+
+    print("Lower-signal one-offs:")
+    if one_off_groups:
+        for index, group in enumerate(one_off_groups, start=1):
+            print_proof_gap_group(index, group, args.evidence_limit)
+    else:
+        print("- none")
+    suppressed = max(0, len(groups) - len(recurring_groups) - len(one_off_groups))
+    if suppressed:
+        print(f"Suppressed lower-ranked groups={suppressed}")
+    return 0
+
+
 def command_action_next(args: argparse.Namespace) -> int:
     db_path = Path(args.db_path)
     require_database(db_path)
@@ -6331,6 +6857,14 @@ def parse_args() -> argparse.Namespace:
     )
     cooldowns.add_argument("--as-of")
     cooldowns.add_argument("--limit", type=int, default=COOLDOWN_RECOMMENDATION_LIMIT)
+    proof_gaps = report_subparsers.add_parser(
+        "proof-gaps",
+        help="Rank recurring proof gaps across jobs, companies, actions, and events.",
+    )
+    proof_gaps.add_argument("--as-of")
+    proof_gaps.add_argument("--limit", type=int, default=20)
+    proof_gaps.add_argument("--evidence-limit", type=int, default=4)
+    proof_gaps.add_argument("--one-off-limit", type=int, default=5)
 
     return parser.parse_args()
 
@@ -6549,6 +7083,8 @@ def main() -> int:
                 return command_report_hygiene(args)
             if args.report_command == "cooldowns":
                 return command_report_cooldowns(args)
+            if args.report_command == "proof-gaps":
+                return command_report_proof_gaps(args)
         if args.command == "action":
             if args.action_command == "add":
                 return command_action_add(args)
