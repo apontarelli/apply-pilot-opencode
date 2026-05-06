@@ -59,6 +59,7 @@ python3 scripts/job_search.py event add --company "Company" --type note --notes 
 python3 scripts/job_search.py event list --company "Company"
 python3 scripts/job_search.py metrics
 python3 scripts/job_search.py report hygiene
+python3 scripts/job_search.py report cooldowns
 python3 scripts/job_search.py import-pipeline
 ```
 
@@ -117,6 +118,7 @@ present.
 
 ```bash
 python3 scripts/job_search.py report hygiene
+python3 scripts/job_search.py report cooldowns
 ```
 
 The hygiene report is read-only. It surfaces stale `follow_up`, `apply`, and
@@ -125,6 +127,16 @@ application or rejection events still need final outcome/disposition cleanup,
 and recently active companies that no longer have an open next action. Each row
 includes stable action, job, company, or event IDs needed to resolve the item
 through the normal command paths.
+
+The cooldown recommendations report is also read-only. It surfaces advisory
+company and role-pattern cooldowns from stored `jobs.application_outcome`,
+`jobs.rejection_reason`, and linked `events` / `actions` evidence. It distinguishes
+temporary no-screen, interview-loop, and timing/capacity signals from durable
+pass or low-priority signals, prints the evidence rows behind each
+recommendation, and suggests the next review date.
+Operators should treat the report as a decision aid: inspect the evidence, then
+make any company status, action, or due-date changes explicitly through normal
+commands when the recommendation is still correct.
 
 ## Outcome Taxonomy Recording
 

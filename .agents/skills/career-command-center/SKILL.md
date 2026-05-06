@@ -79,6 +79,7 @@ Common reads:
 - `python3 scripts/job_search.py contact list --company "Company"`
 - `python3 scripts/job_search.py event list --company "Company"`
 - `python3 scripts/job_search.py metrics`
+- `python3 scripts/job_search.py report cooldowns`
 
 Common writes:
 
@@ -157,6 +158,14 @@ Keep broad query source-quality reasons out of job outcomes. `search_noisy`,
 duplicate/noisy broad-source rows stay in `query_run_results.notes` until
 SID-145 creates query-pack tuning reports. Only use job-level reasons after a
 result has become a command-center job.
+
+Use `python3 scripts/job_search.py report cooldowns` during weekly outcome
+hygiene or before adding new work for a company or repeated role pattern. Treat
+the report as advisory only: inspect the evidence rows, distinguish temporary
+timing/interview/no-screen cooldowns from durable pass or low-priority signals,
+then make any company status, action, or due-date changes explicitly through the
+normal commands. Do not let the report hide jobs, cancel actions, or mutate
+company state automatically.
 
 ## Decision Rules
 
