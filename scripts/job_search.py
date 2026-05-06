@@ -6184,6 +6184,23 @@ def command_report_strategy_feedback(args: argparse.Namespace) -> int:
                 operator_action="review before editing config/job_search_query_packs.json",
             )
         )
+    if active_targets > 0:
+        keep.append(
+            format_strategy_feedback_recommendation(
+                "keep",
+                target="product strategy",
+                evidence=(
+                    f"active_targets={active_targets} "
+                    f"with_active_sources={targets_with_sources} "
+                    f"missing_active_sources={targets_missing_sources}"
+                ),
+                recommendation="keep target-company coverage in the weekly learning loop",
+                operator_action=(
+                    "update docs/PRODUCT_STRATEGY.md only if coverage goals or "
+                    "company-first workflow priorities change"
+                ),
+            )
+        )
     if applications > 0 or interviews > 0:
         keep.append(
             format_strategy_feedback_recommendation(

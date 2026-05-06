@@ -235,7 +235,7 @@ Deliverables:
 
 ### Milestone 6: Strategy Feedback Loop
 
-Status: planned.
+Status: shipped baseline.
 
 Goal: make the system learn from outcomes.
 

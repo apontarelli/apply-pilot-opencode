@@ -2059,6 +2059,23 @@ class JobSearchDatabaseTests(unittest.TestCase):
                     )
                     connection.execute(
                         """
+                        INSERT INTO company_sources(
+                            company_id, source_type, source_key, status,
+                            created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            ai_workflow,
+                            "greenhouse",
+                            "ai-workflow-co",
+                            "active",
+                            "2026-04-30T00:00:00+00:00",
+                            "2026-04-30T00:00:00+00:00",
+                        ),
+                    )
+                    connection.execute(
+                        """
                         INSERT INTO query_runs(
                             source, pack, query_text, status, result_count,
                             accepted_count, rejected_count, duplicate_count,
@@ -2149,6 +2166,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertIn("- query_quality:", result.stdout)
             self.assertIn("Recommendations:", result.stdout)
             self.assertIn("decision=keep | target=query-pack config", result.stdout)
+            self.assertIn("decision=keep | target=product strategy", result.stdout)
             self.assertIn("decision=change | target=query-pack config", result.stdout)
             self.assertIn("decision=change | target=Linear follow-up", result.stdout)
             self.assertIn("decision=defer | target=Linear follow-up", result.stdout)
