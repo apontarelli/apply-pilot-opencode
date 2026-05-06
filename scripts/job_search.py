@@ -5775,6 +5775,508 @@ def format_query_tuning_line(
     )
 
 
+def strategy_feedback_artifact_target(improvement: str) -> str:
+    if improvement == "application playbook":
+        return "application playbook"
+    if improvement == "bullet":
+        return "user bullets"
+    if improvement == "resume lane":
+        return "resume lane"
+    if improvement == "artifact":
+        return "Linear follow-up"
+    return "career strategy"
+
+
+def strategy_feedback_query_quality(
+    connection: sqlite3.Connection, *, since_text: str, until_text: str
+) -> sqlite3.Row:
+    return connection.execute(
+        """
+        SELECT
+            COUNT(*) AS results,
+            SUM(CASE WHEN result_status != 'pending' THEN 1 ELSE 0 END) AS reviewed,
+            SUM(CASE WHEN result_status = 'pending' THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN result_status = 'accepted' THEN 1 ELSE 0 END) AS accepted,
+            SUM(CASE WHEN result_status = 'rejected' THEN 1 ELSE 0 END) AS rejected,
+            SUM(CASE WHEN result_status = 'duplicate' THEN 1 ELSE 0 END) AS duplicate,
+            SUM(
+                CASE
+                    WHEN result_status = 'rejected'
+                        AND (
+                            lower(COALESCE(notes, '')) LIKE '%search_noisy%'
+                            OR lower(COALESCE(notes, '')) LIKE '%malformed_payload%'
+                            OR lower(COALESCE(duplicate_reason, '')) LIKE '%search_noisy%'
+                            OR lower(COALESCE(duplicate_reason, '')) LIKE '%malformed_payload%'
+                        )
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS noisy,
+            SUM(
+                CASE
+                    WHEN result_status = 'rejected'
+                        AND (
+                            lower(COALESCE(notes, '')) LIKE '%stale_or_thin_result%'
+                            OR lower(COALESCE(notes, '')) LIKE '%detail_validation_failed%'
+                            OR lower(COALESCE(duplicate_reason, '')) LIKE '%stale_or_thin_result%'
+                            OR lower(COALESCE(duplicate_reason, '')) LIKE '%detail_validation_failed%'
+                        )
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS stale_thin
+        FROM query_run_results
+        WHERE updated_at >= ?
+            AND updated_at < ?
+        """,
+        (since_text, until_text),
+    ).fetchone()
+
+
+def strategy_feedback_top_query(
+    connection: sqlite3.Connection, *, status: str, since_text: str, until_text: str
+) -> sqlite3.Row | None:
+    return connection.execute(
+        """
+        SELECT query_runs.pack, query_runs.query_text, COUNT(*) AS count
+        FROM query_run_results
+        JOIN query_runs ON query_runs.id = query_run_results.query_run_id
+        WHERE query_run_results.result_status = ?
+            AND query_run_results.updated_at >= ?
+            AND query_run_results.updated_at < ?
+        GROUP BY query_runs.pack, query_runs.query_text
+        ORDER BY count DESC, query_runs.pack, query_runs.query_text
+        LIMIT 1
+        """,
+        (status, since_text, until_text),
+    ).fetchone()
+
+
+def strategy_feedback_target_coverage(
+    connection: sqlite3.Connection, *, stale_before_text: str
+) -> sqlite3.Row:
+    return connection.execute(
+        f"""
+        SELECT
+            COUNT(*) AS active_targets,
+            SUM(CASE WHEN active_sources.company_id IS NOT NULL THEN 1 ELSE 0 END)
+                AS with_active_sources,
+            SUM(CASE WHEN active_sources.company_id IS NULL THEN 1 ELSE 0 END)
+                AS missing_active_sources,
+            SUM(
+                CASE
+                    WHEN active_sources.company_id IS NULL
+                        AND (companies.career_url IS NULL OR companies.career_url = '')
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS missing_source_details,
+            SUM(
+                CASE
+                    WHEN active_sources.company_id IS NULL
+                        AND companies.career_url IS NOT NULL
+                        AND companies.career_url != ''
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS official_fallback_only,
+            SUM(
+                CASE
+                    WHEN companies.ats_type IS NOT NULL
+                        AND companies.ats_type != ''
+                        AND lower(companies.ats_type) NOT IN ({", ".join("?" for _ in ATS_TYPES)})
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS unsupported_sources,
+            SUM(
+                CASE
+                    WHEN companies.last_checked_at IS NULL
+                        OR companies.last_checked_at < ?
+                    THEN 1
+                    ELSE 0
+                END
+            ) AS stale_checks
+        FROM companies
+        LEFT JOIN (
+            SELECT DISTINCT company_id
+            FROM company_sources
+            WHERE status = 'active'
+        ) AS active_sources ON active_sources.company_id = companies.id
+        WHERE companies.status IN ('active', 'watch')
+        """,
+        (*ATS_TYPES, stale_before_text),
+    ).fetchone()
+
+
+def format_strategy_feedback_recommendation(
+    decision: str,
+    *,
+    target: str,
+    evidence: str,
+    recommendation: str,
+    operator_action: str,
+) -> str:
+    return (
+        f"- decision={decision} | target={target} | evidence={evidence} | "
+        f"recommendation={recommendation} | operator_action={operator_action}"
+    )
+
+
+def command_report_strategy_feedback(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_current_database_read_only(db_path)
+    as_of = parse_report_as_of(args.as_of)
+    if args.days <= 0:
+        raise ValueError("report strategy-feedback --days must be a positive integer")
+    if args.limit <= 0:
+        raise ValueError("report strategy-feedback --limit must be a positive integer")
+
+    since = as_of - timedelta(days=args.days)
+    since_text = since.isoformat()
+    as_of_text = as_of.isoformat()
+    stale_before_text = (as_of - timedelta(days=14)).isoformat()
+
+    with closing(connect(db_path)) as connection:
+        record_count = command_center_record_count(connection)
+        outcome_rows = connection.execute(
+            """
+            SELECT
+                COUNT(*) AS total_jobs,
+                SUM(CASE WHEN application_outcome IS NOT NULL THEN 1 ELSE 0 END)
+                    AS outcome_classified,
+                SUM(CASE WHEN application_outcome = 'pending_response' THEN 1 ELSE 0 END)
+                    AS pending_response,
+                SUM(CASE WHEN application_outcome = 'active_interview_loop' THEN 1 ELSE 0 END)
+                    AS active_interview_loop,
+                SUM(CASE WHEN application_outcome LIKE 'rejected_%' THEN 1 ELSE 0 END)
+                    AS rejected,
+                SUM(CASE WHEN rejection_reason = 'missing_proof' THEN 1 ELSE 0 END)
+                    AS missing_proof,
+                SUM(CASE WHEN rejection_reason = 'low_interest' THEN 1 ELSE 0 END)
+                    AS low_interest,
+                SUM(CASE WHEN rejection_reason = 'recruiter_screen_risk' THEN 1 ELSE 0 END)
+                    AS recruiter_screen_risk
+            FROM jobs
+            """
+        ).fetchone()
+        funnel = connection.execute(
+            """
+            SELECT
+                SUM(CASE WHEN queue = 'screen' AND status = 'done' THEN 1 ELSE 0 END)
+                    AS screens_done,
+                SUM(CASE WHEN queue = 'apply' AND status = 'done' THEN 1 ELSE 0 END)
+                    AS apply_actions_done
+            FROM actions
+            WHERE COALESCE(completed_at, updated_at) >= ?
+                AND COALESCE(completed_at, updated_at) < ?
+            """,
+            (since_text, as_of_text),
+        ).fetchone()
+        event_counts = connection.execute(
+            """
+            SELECT
+                SUM(CASE WHEN event_type = 'application_submitted' THEN 1 ELSE 0 END)
+                    AS applications_submitted,
+                SUM(CASE WHEN event_type = 'interview' THEN 1 ELSE 0 END)
+                    AS interviews,
+                SUM(CASE WHEN event_type = 'rejection_received' THEN 1 ELSE 0 END)
+                    AS rejections
+            FROM events
+            WHERE happened_at >= ?
+                AND happened_at < ?
+            """,
+            (since_text, as_of_text),
+        ).fetchone()
+        target_coverage = strategy_feedback_target_coverage(
+            connection, stale_before_text=stale_before_text
+        )
+        query_quality = strategy_feedback_query_quality(
+            connection, since_text=since_text, until_text=as_of_text
+        )
+        top_accepted_query = strategy_feedback_top_query(
+            connection,
+            status="accepted",
+            since_text=since_text,
+            until_text=as_of_text,
+        )
+        top_rejected_query = strategy_feedback_top_query(
+            connection,
+            status="rejected",
+            since_text=since_text,
+            until_text=as_of_text,
+        )
+        cooldowns = grouped_cooldown_recommendations(
+            evidence_rows=cooldown_evidence_rows(connection, as_of=as_of),
+            as_of=as_of,
+            limit=args.limit,
+        )
+        proof_groups = group_proof_gap_evidence(proof_gap_evidence(connection))
+
+    temporary_cooldowns = [
+        item for item in cooldowns if item.recommendation_type == "temporary"
+    ]
+    durable_cooldowns = [
+        item for item in cooldowns if item.recommendation_type == "durable"
+    ]
+    recurring_proof_groups = [
+        group for group in proof_groups if proof_gap_strength(group) != "one_off"
+    ]
+    one_off_proof_groups = [
+        group for group in proof_groups if proof_gap_strength(group) == "one_off"
+    ]
+
+    print(f"Strategy feedback report as_of={as_of.isoformat()} window_days={args.days}")
+    print(
+        "Mode: advisory read-only; document, config, and Linear changes remain operator-controlled."
+    )
+    print(
+        "Workflow boundary: command-center strategy review only; route discovery to "
+        "$job-search and ready-JD application materials to $job-apply."
+    )
+    if record_count == 0:
+        print("No command center data.")
+        print("Evidence:")
+        print("- outcomes: none")
+        print("- funnel_metrics: none")
+        print("- cooldowns: none")
+        print("- proof_gaps: none")
+        print("- target_company_coverage: none")
+        print("- query_quality: none")
+        print("Recommendations:")
+        print("Keep:")
+        print("- none")
+        print("Change:")
+        print("- none")
+        print("Defer:")
+        print("- none")
+        return 0
+
+    applications = event_counts["applications_submitted"] or 0
+    interviews = event_counts["interviews"] or 0
+    rejections = event_counts["rejections"] or 0
+    query_results = query_quality["results"] or 0
+    query_reviewed = query_quality["reviewed"] or 0
+    query_pending = query_quality["pending"] or 0
+    query_accepted = query_quality["accepted"] or 0
+    query_rejected = query_quality["rejected"] or 0
+    query_duplicate = query_quality["duplicate"] or 0
+    query_noisy = query_quality["noisy"] or 0
+    query_stale_thin = query_quality["stale_thin"] or 0
+    active_targets = target_coverage["active_targets"] or 0
+    targets_with_sources = target_coverage["with_active_sources"] or 0
+    targets_missing_sources = target_coverage["missing_active_sources"] or 0
+    targets_missing_details = target_coverage["missing_source_details"] or 0
+    targets_fallback_only = target_coverage["official_fallback_only"] or 0
+    targets_unsupported = target_coverage["unsupported_sources"] or 0
+    targets_stale = target_coverage["stale_checks"] or 0
+
+    print("Evidence:")
+    print(
+        "- outcomes: "
+        f"jobs={outcome_rows['total_jobs'] or 0} "
+        f"outcome_classified={outcome_rows['outcome_classified'] or 0} "
+        f"pending_response={outcome_rows['pending_response'] or 0} "
+        f"active_interview_loop={outcome_rows['active_interview_loop'] or 0} "
+        f"rejected={outcome_rows['rejected'] or 0} "
+        f"missing_proof={outcome_rows['missing_proof'] or 0} "
+        f"low_interest={outcome_rows['low_interest'] or 0} "
+        f"recruiter_screen_risk={outcome_rows['recruiter_screen_risk'] or 0}"
+    )
+    print(
+        "- funnel_metrics: "
+        f"screens_done={funnel['screens_done'] or 0} "
+        f"apply_actions_done={funnel['apply_actions_done'] or 0} "
+        f"applications_submitted={applications} interviews={interviews} "
+        f"rejections={rejections} interview_rate={percent(interviews, applications)} "
+        f"rejection_rate={percent(rejections, applications)}"
+    )
+    print(
+        "- cooldowns: "
+        f"temporary={len(temporary_cooldowns)} durable={len(durable_cooldowns)} "
+        f"top={cooldowns[0].target_label if cooldowns else 'none'}"
+    )
+    print(
+        "- proof_gaps: "
+        f"groups={len(proof_groups)} recurring={len(recurring_proof_groups)} "
+        f"one_off={len(one_off_proof_groups)} "
+        f"top={proof_groups[0].label if proof_groups else 'none'}"
+    )
+    print(
+        "- target_company_coverage: "
+        f"active_targets={active_targets} with_active_sources={targets_with_sources} "
+        f"missing_active_sources={targets_missing_sources} "
+        f"missing_source_details={targets_missing_details} "
+        f"official_fallback_only={targets_fallback_only} "
+        f"unsupported_sources={targets_unsupported} stale_checks={targets_stale}"
+    )
+    accepted_query_label = (
+        f"{top_accepted_query['pack']}:{top_accepted_query['query_text']}"
+        if top_accepted_query
+        else "none"
+    )
+    rejected_query_label = (
+        f"{top_rejected_query['pack']}:{top_rejected_query['query_text']}"
+        if top_rejected_query
+        else "none"
+    )
+    print(
+        "- query_quality: "
+        f"results={query_results} reviewed={query_reviewed} pending={query_pending} "
+        f"accepted={query_accepted} rejected={query_rejected} "
+        f"duplicate={query_duplicate} noisy={query_noisy} "
+        f"stale_thin={query_stale_thin} "
+        f"top_accepted_query={json.dumps(accepted_query_label)} "
+        f"top_rejected_query={json.dumps(rejected_query_label)}"
+    )
+
+    keep: list[str] = []
+    change: list[str] = []
+    defer: list[str] = []
+
+    if top_accepted_query:
+        keep.append(
+            format_strategy_feedback_recommendation(
+                "keep",
+                target="query-pack config",
+                evidence=(
+                    f"accepted={top_accepted_query['count']} "
+                    f"pack={top_accepted_query['pack']} "
+                    f"query={json.dumps(top_accepted_query['query_text'])}"
+                ),
+                recommendation="preserve this query pattern in the next search cycle",
+                operator_action="review before editing config/job_search_query_packs.json",
+            )
+        )
+    if applications > 0 or interviews > 0:
+        keep.append(
+            format_strategy_feedback_recommendation(
+                "keep",
+                target="career strategy",
+                evidence=f"applications_submitted={applications} interviews={interviews}",
+                recommendation="keep the current apply-through loop visible in weekly review",
+                operator_action="update career strategy only if this becomes a durable priority",
+            )
+        )
+
+    if query_noisy > 0 or query_stale_thin > 0:
+        change.append(
+            format_strategy_feedback_recommendation(
+                "change",
+                target="query-pack config",
+                evidence=(
+                    f"noisy={query_noisy} stale_thin={query_stale_thin} "
+                    f"top_rejected_query={json.dumps(rejected_query_label)}"
+                ),
+                recommendation="tighten noisy queries or prefer canonical/official sources",
+                operator_action="edit config only after reviewing query-pack-tuning evidence",
+            )
+        )
+    if targets_missing_sources > 0 or targets_stale > 0:
+        change.append(
+            format_strategy_feedback_recommendation(
+                "change",
+                target="career strategy",
+                evidence=(
+                    f"missing_active_sources={targets_missing_sources} "
+                    f"stale_checks={targets_stale}"
+                ),
+                recommendation="prioritize source coverage for active target companies",
+                operator_action="create explicit research/source actions before changing strategy docs",
+            )
+        )
+    if temporary_cooldowns:
+        first = temporary_cooldowns[0]
+        change.append(
+            format_strategy_feedback_recommendation(
+                "change",
+                target="career strategy",
+                evidence=(
+                    f"cooldown={first.target_label} signal={first.signal} "
+                    f"next_review={first.next_review_at}"
+                ),
+                recommendation="reduce near-term effort on cooled targets or role patterns",
+                operator_action="reschedule actions manually if the evidence still applies",
+            )
+        )
+    if recurring_proof_groups:
+        group = recurring_proof_groups[0]
+        improvement = recommend_proof_gap_improvement(group)
+        change.append(
+            format_strategy_feedback_recommendation(
+                "change",
+                target=strategy_feedback_artifact_target(improvement),
+                evidence=(
+                    f"proof_gap={group.label} strength={proof_gap_strength(group)} "
+                    f"jobs={len(group.job_ids)} companies={len(group.company_ids)}"
+                ),
+                recommendation=(
+                    "promote recurring proof gap into artifact work"
+                    if improvement == "artifact"
+                    else f"promote recurring proof gap into a {improvement} update"
+                ),
+                operator_action="make the doc/config/issue change explicitly after review",
+            )
+        )
+
+    if durable_cooldowns:
+        first = durable_cooldowns[0]
+        defer.append(
+            format_strategy_feedback_recommendation(
+                "defer",
+                target="career strategy",
+                evidence=(
+                    f"durable_cooldown={first.target_label} "
+                    f"signal={first.signal} next_review={first.next_review_at}"
+                ),
+                recommendation="defer renewed effort until the review date or target criteria change",
+                operator_action="leave company/job changes under operator control",
+            )
+        )
+    if one_off_proof_groups:
+        group = one_off_proof_groups[0]
+        defer.append(
+            format_strategy_feedback_recommendation(
+                "defer",
+                target="Linear follow-up",
+                evidence=(
+                    f"proof_gap={group.label} strength=one_off "
+                    f"evidence={len(group.evidence)}"
+                ),
+                recommendation="do not create larger proof-building work until the pattern repeats",
+                operator_action="keep evidence in command-center state for now",
+            )
+        )
+    if query_pending > query_reviewed:
+        defer.append(
+            format_strategy_feedback_recommendation(
+                "defer",
+                target="query-pack config",
+                evidence=f"pending={query_pending} reviewed={query_reviewed}",
+                recommendation="defer pack edits until pending/raw hits are reviewed",
+                operator_action="review query_run_results before changing config",
+            )
+        )
+
+    print("Recommendations:")
+    print("Keep:")
+    for line in keep[: args.limit]:
+        print(line)
+    if not keep:
+        print("- none")
+    print("Change:")
+    for line in change[: args.limit]:
+        print(line)
+    if not change:
+        print("- none")
+    print("Defer:")
+    for line in defer[: args.limit]:
+        print(line)
+    if not defer:
+        print("- none")
+    return 0
+
+
 def command_report_query_pack_tuning(args: argparse.Namespace) -> int:
     db_path = Path(args.db_path)
     require_current_database_read_only(db_path)
@@ -7240,6 +7742,13 @@ def parse_args() -> argparse.Namespace:
     proof_gaps.add_argument("--limit", type=int, default=20)
     proof_gaps.add_argument("--evidence-limit", type=int, default=4)
     proof_gaps.add_argument("--one-off-limit", type=int, default=5)
+    strategy_feedback = report_subparsers.add_parser(
+        "strategy-feedback",
+        help="Compose weekly strategy feedback from command-center reports.",
+    )
+    strategy_feedback.add_argument("--as-of")
+    strategy_feedback.add_argument("--days", type=int, default=7)
+    strategy_feedback.add_argument("--limit", type=int, default=20)
     query_pack_tuning = report_subparsers.add_parser(
         "query-pack-tuning",
         help="Recommend query-pack tuning from reviewed query-run results.",
@@ -7465,6 +7974,8 @@ def main() -> int:
                 return command_report_cooldowns(args)
             if args.report_command == "proof-gaps":
                 return command_report_proof_gaps(args)
+            if args.report_command == "strategy-feedback":
+                return command_report_strategy_feedback(args)
             if args.report_command == "query-pack-tuning":
                 return command_report_query_pack_tuning(args)
         if args.command == "action":

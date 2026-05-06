@@ -245,6 +245,9 @@ Deliverables:
 - company and role cooldown rules
 - gap aggregation across passed or failed roles
 - recommended profile, bullet, artifact, or resume-lane improvements
+- weekly `report strategy-feedback` command that composes outcomes, metrics,
+  cooldowns, gaps, target coverage, and query quality into operator-controlled
+  keep/change/defer recommendations
 - durable strategy updates in `YOUR_PROFILE/CAREER_STRATEGY.md` and `YOUR_PROFILE/APPLICATION_PLAYBOOK.md`
 
 ### Milestone 7: Safe Assistive Automation

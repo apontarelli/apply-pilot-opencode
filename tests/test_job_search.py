@@ -1980,6 +1980,181 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 result.stdout,
             )
 
+    def test_report_strategy_feedback_composes_weekly_recommendations(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    payroll_a = self.insert_company(connection, "Payroll A")
+                    payroll_b = self.insert_company(connection, "Payroll B")
+                    ai_workflow = self.insert_company(connection, "AI Workflow Co")
+                    job_a = self.insert_job(
+                        connection,
+                        payroll_a,
+                        title="Senior Product Manager, Payroll Controls",
+                        lane="FINTECH",
+                        status="ignored_by_filter",
+                        rejection_reason="missing_proof",
+                    )
+                    job_b = self.insert_job(
+                        connection,
+                        payroll_b,
+                        title="Product Manager, Payroll Reporting",
+                        lane="FINTECH",
+                        status="ignored_by_filter",
+                        rejection_reason="missing_proof",
+                    )
+                    job_c = self.insert_job(
+                        connection,
+                        ai_workflow,
+                        title="Product Manager, AI Workflow",
+                        lane="AI",
+                        status="applied",
+                        application_outcome="pending_response",
+                    )
+                    self.insert_gap(
+                        connection,
+                        payroll_a,
+                        job_a,
+                        description="Needs payroll controls case study",
+                        severity="high",
+                    )
+                    self.insert_gap(
+                        connection,
+                        payroll_b,
+                        job_b,
+                        description="Needs payroll controls case study",
+                        severity="high",
+                    )
+                    self.insert_gap(
+                        connection,
+                        ai_workflow,
+                        job_c,
+                        description="Needs AI evals demo",
+                        severity="medium",
+                    )
+                    self.insert_action(
+                        connection,
+                        ai_workflow,
+                        job_id=job_c,
+                        queue="screen",
+                        kind="screen_role",
+                        status="done",
+                        completed_at="2026-04-30T00:00:00+00:00",
+                    )
+                    self.insert_event(
+                        connection,
+                        ai_workflow,
+                        job_id=job_c,
+                        event_type="application_submitted",
+                        happened_at="2026-04-30T00:00:00+00:00",
+                        notes="Submitted with AI resume.",
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO query_runs(
+                            source, pack, query_text, status, result_count,
+                            accepted_count, rejected_count, duplicate_count,
+                            import_key, created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            "linkedin_mcp",
+                            "FINTECH",
+                            "senior product manager payroll",
+                            "completed",
+                            2,
+                            1,
+                            1,
+                            0,
+                            "strategy-feedback-fixture",
+                            "2026-04-30T00:00:00+00:00",
+                            "2026-04-30T00:00:00+00:00",
+                        ),
+                    )
+                    query_run_id = self.last_id(connection)
+                    connection.execute(
+                        """
+                        INSERT INTO query_run_results(
+                            query_run_id, ordinal, company_name, title,
+                            canonical_url, result_status, notes, result_key,
+                            created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            query_run_id,
+                            1,
+                            "Good Payroll Co",
+                            "Senior Product Manager, Payroll",
+                            "https://jobs.example.com/good/payroll",
+                            "accepted",
+                            "strong payroll platform fit",
+                            "accepted",
+                            "2026-04-30T00:00:00+00:00",
+                            "2026-04-30T00:00:00+00:00",
+                        ),
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO query_run_results(
+                            query_run_id, ordinal, company_name, title,
+                            canonical_url, result_status, notes, result_key,
+                            created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            query_run_id,
+                            2,
+                            "Noise Co",
+                            "Engineering Manager, Payroll",
+                            "https://jobs.example.com/noise/eng-manager",
+                            "rejected",
+                            "search_noisy: people-management-heavy result",
+                            "rejected",
+                            "2026-04-30T00:00:00+00:00",
+                            "2026-04-30T00:00:00+00:00",
+                        ),
+                    )
+            registry_before = JOB_SEARCH.QUERY_PACK_REGISTRY_PATH.read_text(
+                encoding="utf-8"
+            )
+
+            result = self.run_cli(
+                db_path,
+                "report",
+                "strategy-feedback",
+                "--as-of",
+                "2026-05-07T00:00:00+00:00",
+                "--days",
+                "30",
+            )
+
+            self.assertIn("Strategy feedback report", result.stdout)
+            self.assertIn("Evidence:", result.stdout)
+            self.assertIn("- outcomes:", result.stdout)
+            self.assertIn("- funnel_metrics:", result.stdout)
+            self.assertIn("- cooldowns:", result.stdout)
+            self.assertIn("- proof_gaps:", result.stdout)
+            self.assertIn("- target_company_coverage:", result.stdout)
+            self.assertIn("- query_quality:", result.stdout)
+            self.assertIn("Recommendations:", result.stdout)
+            self.assertIn("decision=keep | target=query-pack config", result.stdout)
+            self.assertIn("decision=change | target=query-pack config", result.stdout)
+            self.assertIn("decision=change | target=Linear follow-up", result.stdout)
+            self.assertIn("decision=defer | target=Linear follow-up", result.stdout)
+            self.assertIn("operator_action=", result.stdout)
+            self.assertIn("$job-search", result.stdout)
+            self.assertIn("$job-apply", result.stdout)
+            self.assertEqual(
+                registry_before,
+                JOB_SEARCH.QUERY_PACK_REGISTRY_PATH.read_text(encoding="utf-8"),
+            )
+
     def test_company_import_adds_multiple_researched_companies_and_sources(
         self,
     ) -> None:

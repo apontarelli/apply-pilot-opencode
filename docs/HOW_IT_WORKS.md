@@ -61,6 +61,7 @@ python3 scripts/job_search.py metrics
 python3 scripts/job_search.py report hygiene
 python3 scripts/job_search.py report cooldowns
 python3 scripts/job_search.py report proof-gaps
+python3 scripts/job_search.py report strategy-feedback
 python3 scripts/job_search.py report query-pack-tuning
 python3 scripts/job_search.py import-pipeline
 ```
@@ -122,6 +123,7 @@ present.
 python3 scripts/job_search.py report hygiene
 python3 scripts/job_search.py report cooldowns
 python3 scripts/job_search.py report proof-gaps
+python3 scripts/job_search.py report strategy-feedback
 python3 scripts/job_search.py report query-pack-tuning
 ```
 
@@ -156,6 +158,29 @@ recurring pattern that requires larger proof-building work outside normal queue
 execution, such as a new artifact, reusable case study, resume-lane rewrite, or
 application-playbook addition. The report never creates portfolio projects or
 Linear issues automatically.
+
+For weekly strategy feedback:
+
+```bash
+python3 scripts/job_search.py report strategy-feedback
+```
+
+The strategy-feedback report is also read-only. It composes existing
+command-center evidence and Milestone 6 recommendation reports into an
+operator-controlled weekly review. It always reviews outcomes, funnel metrics,
+cooldown recommendations, proof-gap recommendations, target-company coverage,
+and reviewed query quality. Output is split into `Evidence` and
+`Recommendations`; recommendations are grouped into `Keep`, `Change`, and
+`Defer`, and each recommendation names the durable artifact target to consider:
+product strategy, career strategy, application playbook, user bullets, resume
+lane, query-pack config, or Linear follow-up.
+
+Use the report as a decision aid, not as an updater. Make any doc, config,
+Linear, action, company, or job changes explicitly through the normal command
+paths after reviewing the evidence. Keep this workflow inside
+`$career-command-center`; route live discovery, posting validation, and JD
+normalization to `$job-search`, and route ready-JD resume/materials work to
+`$job-apply`.
 
 For query-pack tuning:
 
