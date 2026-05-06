@@ -61,6 +61,7 @@ python3 scripts/job_search.py metrics
 python3 scripts/job_search.py report hygiene
 python3 scripts/job_search.py report cooldowns
 python3 scripts/job_search.py report proof-gaps
+python3 scripts/job_search.py report query-pack-tuning
 python3 scripts/job_search.py import-pipeline
 ```
 
@@ -121,6 +122,7 @@ present.
 python3 scripts/job_search.py report hygiene
 python3 scripts/job_search.py report cooldowns
 python3 scripts/job_search.py report proof-gaps
+python3 scripts/job_search.py report query-pack-tuning
 ```
 
 The hygiene report is read-only. It surfaces stale `follow_up`, `apply`, and
@@ -154,6 +156,21 @@ recurring pattern that requires larger proof-building work outside normal queue
 execution, such as a new artifact, reusable case study, resume-lane rewrite, or
 application-playbook addition. The report never creates portfolio projects or
 Linear issues automatically.
+
+For query-pack tuning:
+
+```bash
+python3 scripts/job_search.py report query-pack-tuning
+```
+
+The query-pack tuning report is read-only. It only uses reviewed
+`query_run_results` (`accepted`, `rejected`, or `duplicate`) and explicitly
+ignores pending/raw hits. It surfaces noisy queries, stale/thin source patterns,
+duplicate overlap, strong accepted patterns, and candidate pack edits. Exception
+pack recommendations preserve the explicit-reason guardrail; if a reviewed
+exception run has no `reason=...` rationale in its query-run notes, the report
+recommends recording a reason before repeating or promoting that pack. The report
+does not edit `config/job_search_query_packs.json`.
 
 ## Outcome Taxonomy Recording
 
@@ -479,6 +496,7 @@ python3 scripts/job_search.py query packs list --default-only
 python3 scripts/job_search.py query packs show FINTECH
 python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --limit 25
 python3 scripts/job_search.py query run --source manual_browser --pack ACCESS --reason "specific access/trust target role"
+python3 scripts/job_search.py report query-pack-tuning
 ```
 
 `query run` is a preflight planner: it prints the source, pack, and queries
