@@ -65,16 +65,17 @@ class JobSearchDatabaseTests(unittest.TestCase):
         title: str = "Product Lead",
         lane: str | None = None,
         status: str = "discovered",
-        application_outcome: str | None = None,
         rejection_reason: str | None = None,
+        application_outcome: str | None = None,
+        artifact_opportunity: str | None = None,
     ) -> int:
         connection.execute(
             """
             INSERT INTO jobs(
-                company_id, title, source, lane, status, application_outcome,
-                rejection_reason, created_at, updated_at
+                company_id, title, source, lane, status, rejection_reason,
+                application_outcome, artifact_opportunity, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 company_id,
@@ -82,8 +83,9 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 "manual",
                 lane,
                 status,
-                application_outcome,
                 rejection_reason,
+                application_outcome,
+                artifact_opportunity,
                 NOW,
                 NOW,
             ),
@@ -126,13 +128,32 @@ class JobSearchDatabaseTests(unittest.TestCase):
         connection: sqlite3.Connection,
         company_id: int | None,
         job_id: int | None = None,
+        *,
+        gap_type: str = "domain",
+        description: str = "Needs proof",
+        severity: str = "medium",
+        status: str = "open",
+        resolution_action: str | None = None,
     ) -> int:
         connection.execute(
             """
-            INSERT INTO gaps(company_id, job_id, gap_type, description, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO gaps(
+                company_id, job_id, gap_type, description, severity, status,
+                resolution_action, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (company_id, job_id, "domain", "Needs proof", NOW, NOW),
+            (
+                company_id,
+                job_id,
+                gap_type,
+                description,
+                severity,
+                status,
+                resolution_action,
+                NOW,
+                NOW,
+            ),
         )
         return self.last_id(connection)
 
@@ -1128,6 +1149,174 @@ class JobSearchDatabaseTests(unittest.TestCase):
             )
             self.assertNotIn("suggested_next_review=2026-05-30T00:00:00+00:00", result.stdout)
             self.assertNotIn("suggested_next_review=2026-10-27T00:00:00+00:00", result.stdout)
+
+    def test_report_proof_gaps_groups_repeated_missing_proof_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    ramp = self.insert_company(connection, "Ramp")
+                    stripe = self.insert_company(connection, "Stripe")
+                    ramp_job = self.insert_job(
+                        connection,
+                        ramp,
+                        title="Risk Platform PM",
+                        lane="FINTECH",
+                        status="rejected",
+                        rejection_reason="missing_proof",
+                        application_outcome="rejected_before_screen",
+                        artifact_opportunity="payments risk controls",
+                    )
+                    stripe_job = self.insert_job(
+                        connection,
+                        stripe,
+                        title="Product Lead, Controls",
+                        lane="FINTECH",
+                        status="ignored_by_filter",
+                        rejection_reason="missing_proof",
+                        artifact_opportunity="payments risk controls",
+                    )
+                    ramp_gap = self.insert_gap(
+                        connection,
+                        ramp,
+                        ramp_job,
+                        description="Needs proof: payments risk controls",
+                        severity="high",
+                        resolution_action="Build payments risk controls case study.",
+                    )
+                    stripe_gap = self.insert_gap(
+                        connection,
+                        stripe,
+                        stripe_job,
+                        description="Missing proof: payments risk controls",
+                        severity="medium",
+                    )
+                    self.insert_action(
+                        connection,
+                        ramp,
+                        job_id=ramp_job,
+                        gap_id=ramp_gap,
+                        queue="artifact",
+                        kind="build_case_study",
+                        notes="payments risk controls case study",
+                    )
+                    self.insert_event(
+                        connection,
+                        stripe,
+                        job_id=stripe_job,
+                        gap_id=stripe_gap,
+                        event_type="gap_identified",
+                        notes="payments risk controls came up again",
+                    )
+                    before_counts = connection.execute(
+                        """
+                        SELECT
+                            (SELECT COUNT(*) FROM companies),
+                            (SELECT COUNT(*) FROM jobs),
+                            (SELECT COUNT(*) FROM gaps),
+                            (SELECT COUNT(*) FROM actions),
+                            (SELECT COUNT(*) FROM events)
+                        """
+                    ).fetchone()
+
+            result = self.run_cli(
+                db_path,
+                "report",
+                "proof-gaps",
+                "--as-of",
+                "2026-05-02T00:00:00+00:00",
+            )
+
+            with closing(self.connect(db_path)) as connection:
+                after_counts = connection.execute(
+                    """
+                    SELECT
+                        (SELECT COUNT(*) FROM companies),
+                        (SELECT COUNT(*) FROM jobs),
+                        (SELECT COUNT(*) FROM gaps),
+                        (SELECT COUNT(*) FROM actions),
+                        (SELECT COUNT(*) FROM events)
+                    """
+                ).fetchone()
+
+            self.assertEqual(before_counts, after_counts)
+            self.assertIn(
+                "Proof gap report as_of=2026-05-02T00:00:00+00:00",
+                result.stdout,
+            )
+            self.assertIn("payments risk controls", result.stdout)
+            self.assertIn("strength=recurring", result.stdout)
+            self.assertIn("improvement=artifact", result.stdout)
+            self.assertIn("jobs=2", result.stdout)
+            self.assertIn("companies=2", result.stdout)
+            self.assertIn("lanes=FINTECH", result.stdout)
+            self.assertIn("statuses=ignored_by_filter,rejected", result.stdout)
+            self.assertIn("outcomes=rejected_before_screen", result.stdout)
+            self.assertIn("reasons=missing_proof", result.stdout)
+            self.assertIn("gap=#", result.stdout)
+            self.assertIn("action=#", result.stdout)
+            self.assertIn("event=#", result.stdout)
+
+    def test_report_proof_gaps_ranks_one_offs_below_recurring_groups(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_a = self.insert_company(connection, "Company A")
+                    company_b = self.insert_company(connection, "Company B")
+                    company_c = self.insert_company(connection, "Company C")
+                    job_a = self.insert_job(
+                        connection,
+                        company_a,
+                        lane="AI",
+                        rejection_reason="missing_proof",
+                        artifact_opportunity="workflow automation ROI",
+                    )
+                    job_b = self.insert_job(
+                        connection,
+                        company_b,
+                        lane="AI",
+                        rejection_reason="missing_proof",
+                        artifact_opportunity="workflow automation ROI",
+                    )
+                    job_c = self.insert_job(
+                        connection,
+                        company_c,
+                        lane="FINTECH",
+                        rejection_reason="missing_proof",
+                        artifact_opportunity="treasury operations",
+                    )
+                    self.insert_gap(
+                        connection,
+                        company_a,
+                        job_a,
+                        description="Needs proof: workflow automation ROI",
+                    )
+                    self.insert_gap(
+                        connection,
+                        company_b,
+                        job_b,
+                        description="Missing proof: workflow automation ROI",
+                    )
+                    self.insert_gap(
+                        connection,
+                        company_c,
+                        job_c,
+                        description="Missing proof: treasury operations",
+                    )
+
+            result = self.run_cli(db_path, "report", "proof-gaps")
+
+            recurring_index = result.stdout.index("workflow automation roi")
+            one_off_index = result.stdout.index("treasury operations")
+            self.assertLess(recurring_index, one_off_index)
+            self.assertIn("workflow automation roi | strength=recurring", result.stdout)
+            self.assertIn("treasury operations | strength=one_off", result.stdout)
+            self.assertIn("Lower-signal one-offs:", result.stdout)
 
     def test_action_next_includes_execution_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

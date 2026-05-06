@@ -60,6 +60,7 @@ python3 scripts/job_search.py event list --company "Company"
 python3 scripts/job_search.py metrics
 python3 scripts/job_search.py report hygiene
 python3 scripts/job_search.py report cooldowns
+python3 scripts/job_search.py report proof-gaps
 python3 scripts/job_search.py import-pipeline
 ```
 
@@ -119,6 +120,7 @@ present.
 ```bash
 python3 scripts/job_search.py report hygiene
 python3 scripts/job_search.py report cooldowns
+python3 scripts/job_search.py report proof-gaps
 ```
 
 The hygiene report is read-only. It surfaces stale `follow_up`, `apply`, and
@@ -137,6 +139,21 @@ recommendation, and suggests the next review date.
 Operators should treat the report as a decision aid: inspect the evidence, then
 make any company status, action, or due-date changes explicitly through normal
 commands when the recommendation is still correct.
+
+The proof-gap report is also read-only. It groups repeated missing-proof signals
+from structured `gaps`, `jobs.rejection_reason`, artifact opportunities, linked
+actions, and linked events, then ranks recurring patterns above one-off gaps.
+Each recommendation shows strength, score, suggested improvement type
+(`profile`, `bullet`, `artifact`, `resume lane`, or `application playbook`),
+job/company/lane/status counts, and supporting evidence IDs.
+
+Keep role- and company-specific relevance in SQLite when the gap is still a
+screening reason, rejection reason, open command-center action, or small
+profile/materials update. Create a Linear follow-up only when the report shows a
+recurring pattern that requires larger proof-building work outside normal queue
+execution, such as a new artifact, reusable case study, resume-lane rewrite, or
+application-playbook addition. The report never creates portfolio projects or
+Linear issues automatically.
 
 ## Outcome Taxonomy Recording
 
