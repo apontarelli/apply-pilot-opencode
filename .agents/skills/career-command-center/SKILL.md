@@ -80,6 +80,9 @@ Common reads:
 - `python3 scripts/job_search.py event list --company "Company"`
 - `python3 scripts/job_search.py metrics`
 - `python3 scripts/job_search.py report cooldowns`
+- `python3 scripts/job_search.py report proof-gaps`
+- `python3 scripts/job_search.py report query-pack-tuning`
+- `python3 scripts/job_search.py report strategy-feedback`
 
 Common writes:
 
@@ -166,6 +169,20 @@ timing/interview/no-screen cooldowns from durable pass or low-priority signals,
 then make any company status, action, or due-date changes explicitly through the
 normal commands. Do not let the report hide jobs, cancel actions, or mutate
 company state automatically.
+
+Use `python3 scripts/job_search.py report proof-gaps` during weekly review to
+identify recurring missing-proof patterns that may justify profile, bullet,
+artifact, resume-lane, application-playbook, or Linear follow-up work.
+
+Use `python3 scripts/job_search.py report query-pack-tuning` after reviewed
+query runs accumulate. Treat candidate edits as recommendations; do not let the
+report edit query-pack config automatically.
+
+Use `python3 scripts/job_search.py report strategy-feedback` for weekly
+keep/change/defer recommendations across outcomes, metrics, cooldowns, proof
+gaps, target-company coverage, and reviewed query quality. Keep the workflow in
+the command center, and route live discovery to `$job-search` or ready-JD
+materials work to `$job-apply`.
 
 ## Decision Rules
 
