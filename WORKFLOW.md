@@ -118,6 +118,8 @@ Use these global skills when the matching workflow phase is reached:
 - `symphony-push`: publish branch/PR and move ready work to `Human Review`.
 - `symphony-land`: merge approved PRs from `Merging`.
 - `symphony-debug`: investigate stalled or failing Symphony runs.
+- `symphony-requirement-validation`: validate Requirement issues after supporting implementation blockers are terminal.
+- `symphony-project-closeout`: close PDR Projects after Requirements are resolved and durable docs are reconciled.
 
 Repo-local instructions override these only for project-specific commands, validation, or release rules.
 
@@ -142,6 +144,15 @@ Use `portless` for any HTTP app server launched during validation unless repo do
 - `Done`: terminal; no work required.
 
 If this project uses different Linear state names, adapt to the nearest matching meaning and record the mapping in the workpad.
+
+## Ticket Class Routing
+
+- `Requirement` label: validation artifact, not implementation work.
+  - Implementation tickets that satisfy a Requirement must block that Requirement in Linear.
+  - Run `symphony-requirement-validation` from `Todo` only after all blocking implementation issues are terminal.
+- `Project Closeout` label: project cleanup work completed last.
+  - Closeout tickets should be blocked by unresolved Requirement issues.
+  - Run `symphony-project-closeout` for closeout execution.
 
 ## Execution Flow
 
