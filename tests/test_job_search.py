@@ -57,13 +57,36 @@ class JobSearchDatabaseTests(unittest.TestCase):
         )
         return self.last_id(connection)
 
-    def insert_job(self, connection: sqlite3.Connection, company_id: int) -> int:
+    def insert_job(
+        self,
+        connection: sqlite3.Connection,
+        company_id: int,
+        *,
+        title: str = "Product Lead",
+        lane: str | None = None,
+        status: str = "discovered",
+        application_outcome: str | None = None,
+        rejection_reason: str | None = None,
+    ) -> int:
         connection.execute(
             """
-            INSERT INTO jobs(company_id, title, source, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO jobs(
+                company_id, title, source, lane, status, application_outcome,
+                rejection_reason, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (company_id, "Product Lead", "manual", NOW, NOW),
+            (
+                company_id,
+                title,
+                "manual",
+                lane,
+                status,
+                application_outcome,
+                rejection_reason,
+                NOW,
+                NOW,
+            ),
         )
         return self.last_id(connection)
 
@@ -167,14 +190,15 @@ class JobSearchDatabaseTests(unittest.TestCase):
         action_id: int | None = None,
         event_type: str = "note",
         happened_at: str = NOW,
+        notes: str | None = None,
     ) -> int:
         connection.execute(
             """
             INSERT INTO events(
                 company_id, job_id, contact_id, artifact_id, gap_id, action_id,
-                event_type, happened_at, created_at
+                event_type, happened_at, notes, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 company_id,
@@ -185,6 +209,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 action_id,
                 event_type,
                 happened_at,
+                notes,
                 NOW,
             ),
         )
@@ -614,6 +639,495 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertIn("run init before reporting", result.stderr)
             self.assertEqual(version, 3)
             self.assertIsNone(query_runs_exists)
+
+    def test_report_cooldowns_smoke_surfaces_repeated_no_screen_rejection(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "No Screen Co")
+                    job_a = self.insert_job(
+                        connection,
+                        company_id,
+                        title="Senior Product Manager, Lending Platform",
+                        lane="FINTECH",
+                        status="rejected",
+                        application_outcome="rejected_before_screen",
+                        rejection_reason="recruiter_screen_risk",
+                    )
+                    job_b = self.insert_job(
+                        connection,
+                        company_id,
+                        title="Staff Product Manager, Lending Platform",
+                        lane="FINTECH",
+                        status="rejected",
+                        application_outcome="rejected_before_screen",
+                        rejection_reason="recruiter_screen_risk",
+                    )
+                    for job_id in (job_a, job_b):
+                        action_id = self.insert_action(
+                            connection,
+                            company_id,
+                            job_id=job_id,
+                            queue="classify",
+                            kind="classify_outcome",
+                            status="done",
+                            completed_at="2026-04-10T00:00:00+00:00",
+                            notes="classified outcome=rejected_before_screen",
+                        )
+                        self.insert_event(
+                            connection,
+                            company_id,
+                            job_id=job_id,
+                            action_id=action_id,
+                            event_type="rejection_received",
+                            happened_at="2026-04-10T00:00:00+00:00",
+                            notes="Rejected before recruiter screen.",
+                        )
+                        self.insert_action(
+                            connection,
+                            company_id,
+                            job_id=job_id,
+                            queue="research",
+                            kind="company_research",
+                            status="done",
+                            completed_at="2026-04-12T00:00:00+00:00",
+                            notes="unrelated later action",
+                        )
+                    before_counts = connection.execute(
+                        """
+                        SELECT
+                            (SELECT COUNT(*) FROM companies),
+                            (SELECT COUNT(*) FROM jobs),
+                            (SELECT COUNT(*) FROM actions),
+                            (SELECT COUNT(*) FROM events)
+                        """
+                    ).fetchone()
+
+            result = self.run_cli(
+                db_path,
+                "report",
+                "cooldowns",
+                "--as-of",
+                "2026-05-02T00:00:00+00:00",
+            )
+
+            with closing(self.connect(db_path)) as connection:
+                after_counts = connection.execute(
+                    """
+                    SELECT
+                        (SELECT COUNT(*) FROM companies),
+                        (SELECT COUNT(*) FROM jobs),
+                        (SELECT COUNT(*) FROM actions),
+                        (SELECT COUNT(*) FROM events)
+                    """
+                ).fetchone()
+                company_status = connection.execute(
+                    "SELECT status, cooldown_until FROM companies WHERE id = ?",
+                    (company_id,),
+                ).fetchone()
+
+            self.assertEqual(before_counts, after_counts)
+            self.assertEqual(tuple(company_status), ("active", None))
+            self.assertIn(
+                "Cooldown recommendations report as_of=2026-05-02T00:00:00+00:00",
+                result.stdout,
+            )
+            self.assertIn("Mode: advisory read-only", result.stdout)
+            self.assertIn("Temporary cooldown recommendations:", result.stdout)
+            self.assertIn("type=temporary", result.stdout)
+            self.assertIn("target=company=#1 No Screen Co", result.stdout)
+            self.assertIn("target=role_pattern=FINTECH/lending+platform", result.stdout)
+            self.assertIn("signal=repeated_no_screen_rejection", result.stdout)
+            self.assertIn("suggested_next_review=2026-05-25T00:00:00+00:00", result.stdout)
+            self.assertIn("evidence job=#", result.stdout)
+            self.assertIn("outcome=rejected_before_screen", result.stdout)
+            self.assertIn("reason=recruiter_screen_risk", result.stdout)
+            self.assertIn("event=#", result.stdout)
+            self.assertIn("classify/done", result.stdout)
+            self.assertNotIn("research/done", result.stdout)
+
+            expired = self.run_cli(
+                db_path,
+                "report",
+                "cooldowns",
+                "--as-of",
+                "2026-05-26T00:00:00+00:00",
+            )
+
+            self.assertIn(
+                "No cooldown recommendations from stored outcome evidence.",
+                expired.stdout,
+            )
+
+    def test_report_cooldowns_surfaces_interview_loop_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "Loop Co")
+                    job_id = self.insert_job(
+                        connection,
+                        company_id,
+                        title="Senior Product Manager, Workflow Automation",
+                        lane="AI",
+                        status="rejected",
+                        application_outcome="rejected_after_interview",
+                        rejection_reason="missing_proof",
+                    )
+                    self.insert_event(
+                        connection,
+                        company_id,
+                        job_id=job_id,
+                        event_type="interview",
+                        happened_at="2026-04-18T00:00:00+00:00",
+                    )
+                    self.insert_event(
+                        connection,
+                        company_id,
+                        job_id=job_id,
+                        event_type="rejection_received",
+                        happened_at="2026-04-25T00:00:00+00:00",
+                    )
+
+            result = self.run_cli(
+                db_path,
+                "report",
+                "cooldowns",
+                "--as-of",
+                "2026-05-02T00:00:00+00:00",
+            )
+
+            self.assertIn("signal=interview_loop_cooldown", result.stdout)
+            self.assertIn("type=temporary", result.stdout)
+            self.assertIn("target=company=#1 Loop Co", result.stdout)
+            self.assertIn("outcome=rejected_after_interview", result.stdout)
+            self.assertIn("suggested_next_review=2026-08-23T00:00:00+00:00", result.stdout)
+
+    def test_report_cooldowns_surfaces_timing_capacity_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "Capacity Co")
+                    job_id = self.insert_job(
+                        connection,
+                        company_id,
+                        title="Principal Product Manager, Payments",
+                        lane="FINTECH",
+                        status="ignored_by_filter",
+                        rejection_reason="timing_or_capacity",
+                    )
+                    self.insert_event(
+                        connection,
+                        company_id,
+                        job_id=job_id,
+                        event_type="note",
+                        happened_at="2026-04-20T00:00:00+00:00",
+                        notes="reason=timing_or_capacity; good in abstract, not worth this month's queue.",
+                    )
+
+            result = self.run_cli(
+                db_path,
+                "report",
+                "cooldowns",
+                "--as-of",
+                "2026-05-02T00:00:00+00:00",
+            )
+
+            self.assertIn("signal=timing_capacity_cooldown", result.stdout)
+            self.assertIn("type=temporary", result.stdout)
+            self.assertIn("reason=timing_or_capacity", result.stdout)
+            self.assertIn("suggested_next_review=2026-05-20T00:00:00+00:00", result.stdout)
+
+    def test_report_cooldowns_surfaces_durable_low_priority_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "Low Priority Co")
+                    job_id = self.insert_job(
+                        connection,
+                        company_id,
+                        title="Product Manager, Consumer Growth",
+                        lane="AI",
+                        status="ignored_by_filter",
+                        application_outcome="passed_by_candidate",
+                        rejection_reason="low_interest",
+                    )
+                    self.insert_event(
+                        connection,
+                        company_id,
+                        job_id=job_id,
+                        event_type="status_changed",
+                        happened_at="2026-04-22T00:00:00+00:00",
+                        notes="reason=low_interest; candidate passed; low priority target pattern.",
+                    )
+
+            result = self.run_cli(
+                db_path,
+                "report",
+                "cooldowns",
+                "--as-of",
+                "2026-05-02T00:00:00+00:00",
+            )
+
+            self.assertIn("Durable pass / low-priority recommendations:", result.stdout)
+            self.assertIn("type=durable", result.stdout)
+            self.assertIn("signal=durable_low_priority", result.stdout)
+            self.assertIn("outcome=passed_by_candidate", result.stdout)
+            self.assertIn("reason=low_interest", result.stdout)
+            self.assertIn("suggested_next_review=2026-10-19T00:00:00+00:00", result.stdout)
+
+    def test_report_cooldowns_does_not_treat_archival_as_durable_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "Archive Co")
+                    self.insert_job(
+                        connection,
+                        company_id,
+                        title="Product Manager, Old Role",
+                        lane="AI",
+                        status="archived",
+                        application_outcome="archived_no_action",
+                    )
+
+            result = self.run_cli(
+                db_path,
+                "report",
+                "cooldowns",
+                "--as-of",
+                "2026-05-02T00:00:00+00:00",
+            )
+
+            self.assertIn(
+                "No cooldown recommendations from stored outcome evidence.",
+                result.stdout,
+            )
+
+    def test_report_cooldowns_excludes_future_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "Future Co")
+                    for title in (
+                        "Senior Product Manager, Platform",
+                        "Staff Product Manager, Platform",
+                    ):
+                        job_id = self.insert_job(
+                            connection,
+                            company_id,
+                            title=title,
+                            lane="AI",
+                            status="rejected",
+                            application_outcome="rejected_before_screen",
+                            rejection_reason="recruiter_screen_risk",
+                        )
+                        self.insert_event(
+                            connection,
+                            company_id,
+                            job_id=job_id,
+                            event_type="rejection_received",
+                            happened_at="2026-06-01T00:00:00+00:00",
+                        )
+                    connection.execute(
+                        "UPDATE jobs SET updated_at = ?",
+                        ("2026-06-01T00:00:00+00:00",),
+                    )
+
+            result = self.run_cli(
+                db_path,
+                "report",
+                "cooldowns",
+                "--as-of",
+                "2026-05-02T00:00:00+00:00",
+            )
+
+            self.assertIn(
+                "No cooldown recommendations from stored outcome evidence.",
+                result.stdout,
+            )
+
+    def test_report_cooldowns_excludes_future_outcome_update_with_old_event(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "Future Outcome Co")
+                    for title in (
+                        "Senior Product Manager, Platform",
+                        "Staff Product Manager, Platform",
+                    ):
+                        job_id = self.insert_job(
+                            connection,
+                            company_id,
+                            title=title,
+                            lane="AI",
+                            status="rejected",
+                            application_outcome="rejected_before_screen",
+                            rejection_reason="recruiter_screen_risk",
+                        )
+                        self.insert_event(
+                            connection,
+                            company_id,
+                            job_id=job_id,
+                            event_type="note",
+                            happened_at="2026-04-01T00:00:00+00:00",
+                            notes="Old company note before outcome classification.",
+                        )
+                    connection.execute(
+                        "UPDATE jobs SET updated_at = ?",
+                        ("2026-06-01T00:00:00+00:00",),
+                    )
+
+            result = self.run_cli(
+                db_path,
+                "report",
+                "cooldowns",
+                "--as-of",
+                "2026-05-02T00:00:00+00:00",
+            )
+
+            self.assertIn(
+                "No cooldown recommendations from stored outcome evidence.",
+                result.stdout,
+            )
+
+    def test_report_cooldowns_ignores_unrelated_later_notes_for_signal_date(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "Later Note Co")
+                    for title in (
+                        "Senior Product Manager, Lending Platform",
+                        "Staff Product Manager, Lending Platform",
+                    ):
+                        job_id = self.insert_job(
+                            connection,
+                            company_id,
+                            title=title,
+                            lane="FINTECH",
+                            status="rejected",
+                            application_outcome="rejected_before_screen",
+                            rejection_reason="recruiter_screen_risk",
+                        )
+                        self.insert_event(
+                            connection,
+                            company_id,
+                            job_id=job_id,
+                            event_type="rejection_received",
+                            happened_at="2026-04-10T00:00:00+00:00",
+                            notes="Rejected before recruiter screen.",
+                        )
+                        self.insert_event(
+                            connection,
+                            company_id,
+                            job_id=job_id,
+                            event_type="note",
+                            happened_at="2026-04-30T00:00:00+00:00",
+                            notes="Unrelated company note.",
+                        )
+
+            result = self.run_cli(
+                db_path,
+                "report",
+                "cooldowns",
+                "--as-of",
+                "2026-05-02T00:00:00+00:00",
+            )
+
+            self.assertIn("suggested_next_review=2026-05-25T00:00:00+00:00", result.stdout)
+            self.assertNotIn("suggested_next_review=2026-06-14T00:00:00+00:00", result.stdout)
+
+    def test_report_cooldowns_ignores_unrelated_notes_for_timing_and_low_interest(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    timing_company_id = self.insert_company(connection, "Timing Note Co")
+                    timing_job_id = self.insert_job(
+                        connection,
+                        timing_company_id,
+                        title="Principal Product Manager, Payments",
+                        lane="FINTECH",
+                        status="ignored_by_filter",
+                        rejection_reason="timing_or_capacity",
+                    )
+                    low_interest_company_id = self.insert_company(
+                        connection, "Low Interest Note Co"
+                    )
+                    low_interest_job_id = self.insert_job(
+                        connection,
+                        low_interest_company_id,
+                        title="Product Manager, Consumer Growth",
+                        lane="AI",
+                        status="ignored_by_filter",
+                        application_outcome="passed_by_candidate",
+                        rejection_reason="low_interest",
+                    )
+                    connection.execute(
+                        "UPDATE jobs SET updated_at = ? WHERE id IN (?, ?)",
+                        (
+                            "2026-04-20T00:00:00+00:00",
+                            timing_job_id,
+                            low_interest_job_id,
+                        ),
+                    )
+                    for company_id, job_id in (
+                        (timing_company_id, timing_job_id),
+                        (low_interest_company_id, low_interest_job_id),
+                    ):
+                        self.insert_event(
+                            connection,
+                            company_id,
+                            job_id=job_id,
+                            event_type="note",
+                            happened_at="2026-04-30T00:00:00+00:00",
+                            notes="Unrelated company note.",
+                        )
+
+            result = self.run_cli(
+                db_path,
+                "report",
+                "cooldowns",
+                "--as-of",
+                "2026-05-02T00:00:00+00:00",
+            )
+
+            self.assertIn(
+                "No cooldown recommendations from stored outcome evidence.",
+                result.stdout,
+            )
+            self.assertNotIn("suggested_next_review=2026-05-30T00:00:00+00:00", result.stdout)
+            self.assertNotIn("suggested_next_review=2026-10-27T00:00:00+00:00", result.stdout)
 
     def test_action_next_includes_execution_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -127,6 +127,9 @@ EVENT_TYPES = (
 )
 NO_INTERVIEW_COOLDOWN_DAYS = 45
 INTERVIEW_LOOP_COOLDOWN_DAYS = 120
+TIMING_CAPACITY_COOLDOWN_DAYS = 30
+DURABLE_LOW_PRIORITY_REVIEW_DAYS = 180
+COOLDOWN_RECOMMENDATION_LIMIT = 20
 LIKELY_DUPLICATE_WINDOW_DAYS = 60
 HYGIENE_ACTION_QUEUES = ("follow_up", "apply", "classify")
 HYGIENE_COMPANY_ACTIVITY_DAYS = 14
@@ -187,6 +190,38 @@ class CompanyImportOutcome:
     company_state: str
     source_state: str
     detail: str | None = None
+
+
+@dataclass(frozen=True)
+class CooldownEvidence:
+    signal: str
+    job_id: int
+    company_id: int
+    company_name: str
+    job_title: str
+    job_status: str
+    role_pattern: str
+    application_outcome: str | None
+    rejection_reason: str | None
+    signal_at: str
+    latest_event_id: int | None
+    latest_event_type: str | None
+    latest_event_at: str | None
+    latest_action_id: int | None
+    latest_action_queue: str | None
+    latest_action_status: str | None
+
+
+@dataclass(frozen=True)
+class CooldownRecommendation:
+    target_type: str
+    target_key: str
+    target_label: str
+    recommendation_type: str
+    signal: str
+    reason: str
+    next_review_at: str
+    evidence: tuple[CooldownEvidence, ...]
 
 
 SCHEMA = """
@@ -1958,6 +1993,467 @@ def format_company_hygiene(row: sqlite3.Row) -> str:
         f"status={row['company_status']} | latest_event=#{row['event_id']} "
         f"{row['event_type']} at {row['happened_at']} | open_actions=0"
     )
+
+
+def role_pattern_label(*, lane: str | None, company_lanes: str | None, title: str) -> str:
+    selected_lane = (lane or first_configured_lane(company_lanes) or "unknown").strip()
+    keywords = sorted(title_keywords(title))
+    keyword_label = "+".join(keywords[:4]) if keywords else normalize_title(title)
+    if not keyword_label:
+        keyword_label = "unclassified"
+    return f"{selected_lane}/{keyword_label}"
+
+
+def cooldown_evidence_rows(
+    connection: sqlite3.Connection, *, as_of: datetime
+) -> list[CooldownEvidence]:
+    as_of_text = as_of.isoformat()
+    rows = connection.execute(
+        """
+        SELECT
+            jobs.id AS job_id,
+            jobs.title AS job_title,
+            jobs.status AS job_status,
+            jobs.lane,
+            jobs.application_outcome,
+            jobs.rejection_reason,
+            jobs.updated_at AS job_updated_at,
+            companies.id AS company_id,
+            companies.name AS company_name,
+            companies.lanes AS company_lanes,
+            rejection_event.id AS rejection_event_id,
+            rejection_event.event_type AS rejection_event_type,
+            rejection_event.happened_at AS rejection_event_at,
+            rejection_action.id AS rejection_action_id,
+            rejection_action.queue AS rejection_action_queue,
+            rejection_action.status AS rejection_action_status,
+            interview_event.id AS interview_event_id,
+            interview_event.event_type AS interview_event_type,
+            interview_event.happened_at AS interview_event_at,
+            interview_action.id AS interview_action_id,
+            interview_action.queue AS interview_action_queue,
+            interview_action.status AS interview_action_status,
+            timing_event.id AS timing_event_id,
+            timing_event.event_type AS timing_event_type,
+            timing_event.happened_at AS timing_event_at,
+            timing_action.id AS timing_action_id,
+            timing_action.queue AS timing_action_queue,
+            timing_action.status AS timing_action_status,
+            low_interest_event.id AS low_interest_event_id,
+            low_interest_event.event_type AS low_interest_event_type,
+            low_interest_event.happened_at AS low_interest_event_at,
+            low_interest_action.id AS low_interest_action_id,
+            low_interest_action.queue AS low_interest_action_queue,
+            low_interest_action.status AS low_interest_action_status,
+            status_event.id AS status_event_id,
+            status_event.event_type AS status_event_type,
+            status_event.happened_at AS status_event_at,
+            status_action.id AS status_action_id,
+            status_action.queue AS status_action_queue,
+            status_action.status AS status_action_status,
+            latest_action.id AS latest_action_id,
+            latest_action.queue AS latest_action_queue,
+            latest_action.status AS latest_action_status
+        FROM jobs
+        JOIN companies ON companies.id = jobs.company_id
+        LEFT JOIN events AS rejection_event ON rejection_event.id = (
+            SELECT events.id
+            FROM events
+            WHERE events.job_id = jobs.id
+                AND events.event_type = 'rejection_received'
+                AND events.happened_at <= ?
+            ORDER BY events.happened_at DESC, events.id DESC
+            LIMIT 1
+        )
+        LEFT JOIN actions AS rejection_action ON rejection_action.id = rejection_event.action_id
+            AND rejection_action.updated_at <= ?
+        LEFT JOIN events AS interview_event ON interview_event.id = (
+            SELECT events.id
+            FROM events
+            WHERE events.job_id = jobs.id
+                AND events.event_type = 'interview'
+                AND events.happened_at <= ?
+            ORDER BY events.happened_at DESC, events.id DESC
+            LIMIT 1
+        )
+        LEFT JOIN actions AS interview_action ON interview_action.id = interview_event.action_id
+            AND interview_action.updated_at <= ?
+        LEFT JOIN events AS timing_event ON timing_event.id = (
+            SELECT events.id
+            FROM events
+            WHERE events.job_id = jobs.id
+                AND events.event_type IN ('status_changed', 'note')
+                AND events.happened_at <= ?
+                AND (
+                    events.notes LIKE '%timing_or_capacity%'
+                    OR events.notes LIKE '%timing/capacity%'
+                    OR events.notes LIKE '%timing capacity%'
+                )
+            ORDER BY events.happened_at DESC, events.id DESC
+            LIMIT 1
+        )
+        LEFT JOIN actions AS timing_action ON timing_action.id = timing_event.action_id
+            AND timing_action.updated_at <= ?
+        LEFT JOIN events AS low_interest_event ON low_interest_event.id = (
+            SELECT events.id
+            FROM events
+            WHERE events.job_id = jobs.id
+                AND events.event_type IN ('status_changed', 'note')
+                AND events.happened_at <= ?
+                AND (
+                    events.notes LIKE '%low_interest%'
+                    OR events.notes LIKE '%low interest%'
+                    OR events.notes LIKE '%low-priority%'
+                    OR events.notes LIKE '%low priority%'
+                )
+            ORDER BY events.happened_at DESC, events.id DESC
+            LIMIT 1
+        )
+        LEFT JOIN actions AS low_interest_action ON low_interest_action.id = low_interest_event.action_id
+            AND low_interest_action.updated_at <= ?
+        LEFT JOIN events AS status_event ON status_event.id = (
+            SELECT events.id
+            FROM events
+            WHERE events.job_id = jobs.id
+                AND events.event_type = 'status_changed'
+                AND events.happened_at <= ?
+            ORDER BY events.happened_at DESC, events.id DESC
+            LIMIT 1
+        )
+        LEFT JOIN actions AS status_action ON status_action.id = status_event.action_id
+            AND status_action.updated_at <= ?
+        LEFT JOIN actions AS latest_action ON latest_action.id = (
+            SELECT actions.id
+            FROM actions
+            WHERE actions.job_id = jobs.id
+                AND actions.status = 'done'
+                AND actions.queue = 'classify'
+                AND actions.updated_at <= ?
+            ORDER BY actions.updated_at DESC, actions.id DESC
+            LIMIT 1
+        )
+        WHERE (
+            jobs.application_outcome IN (
+                'rejected_before_screen',
+                'rejected_after_screen',
+                'rejected_after_interview',
+                'passed_by_candidate'
+            )
+            OR jobs.rejection_reason IN ('timing_or_capacity', 'low_interest')
+        )
+            AND jobs.updated_at <= ?
+        ORDER BY companies.name, jobs.id
+        """,
+        (
+            as_of_text,
+            as_of_text,
+            as_of_text,
+            as_of_text,
+            as_of_text,
+            as_of_text,
+            as_of_text,
+            as_of_text,
+            as_of_text,
+            as_of_text,
+            as_of_text,
+            as_of_text,
+        ),
+    ).fetchall()
+
+    def build_evidence(
+        row: sqlite3.Row,
+        *,
+        signal: str,
+        event_prefixes: tuple[str, ...],
+    ) -> CooldownEvidence:
+        selected_prefix = next(
+            (
+                prefix
+                for prefix in event_prefixes
+                if row[f"{prefix}_event_id"] is not None
+            ),
+            None,
+        )
+        if selected_prefix is None:
+            event_id = None
+            event_type = None
+            event_at = None
+            event_action_id = None
+            event_action_queue = None
+            event_action_status = None
+        else:
+            event_id = int(row[f"{selected_prefix}_event_id"])
+            event_type = row[f"{selected_prefix}_event_type"]
+            event_at = row[f"{selected_prefix}_event_at"]
+            event_action_id = row[f"{selected_prefix}_action_id"]
+            event_action_queue = row[f"{selected_prefix}_action_queue"]
+            event_action_status = row[f"{selected_prefix}_action_status"]
+        action_id = event_action_id or row["latest_action_id"]
+        action_queue = event_action_queue or row["latest_action_queue"]
+        action_status = event_action_status or row["latest_action_status"]
+        return CooldownEvidence(
+            signal=signal,
+            job_id=int(row["job_id"]),
+            company_id=int(row["company_id"]),
+            company_name=str(row["company_name"]),
+            job_title=str(row["job_title"]),
+            job_status=str(row["job_status"]),
+            role_pattern=role_pattern_label(
+                lane=row["lane"],
+                company_lanes=row["company_lanes"],
+                title=str(row["job_title"]),
+            ),
+            application_outcome=row["application_outcome"],
+            rejection_reason=row["rejection_reason"],
+            signal_at=str(event_at or row["job_updated_at"]),
+            latest_event_id=event_id,
+            latest_event_type=event_type,
+            latest_event_at=event_at,
+            latest_action_id=int(action_id) if action_id is not None else None,
+            latest_action_queue=action_queue,
+            latest_action_status=action_status,
+        )
+
+    evidence_rows: list[CooldownEvidence] = []
+    for row in rows:
+        if row["application_outcome"] == "rejected_before_screen":
+            evidence_rows.append(
+                build_evidence(
+                    row,
+                    signal="repeated_no_screen_rejection",
+                    event_prefixes=("rejection", "status"),
+                )
+            )
+        if row["application_outcome"] in (
+            "rejected_after_screen",
+            "rejected_after_interview",
+        ):
+            evidence_rows.append(
+                build_evidence(
+                    row,
+                    signal="interview_loop_cooldown",
+                    event_prefixes=("rejection", "interview", "status"),
+                )
+            )
+        if row["rejection_reason"] == "timing_or_capacity" and row["timing_event_id"]:
+            evidence_rows.append(
+                build_evidence(
+                    row,
+                    signal="timing_capacity_cooldown",
+                    event_prefixes=("timing",),
+                )
+            )
+        if row["rejection_reason"] == "low_interest" and row["low_interest_event_id"]:
+            evidence_rows.append(
+                build_evidence(
+                    row,
+                    signal="durable_low_priority",
+                    event_prefixes=("low_interest",),
+                )
+            )
+    return evidence_rows
+
+
+def normalize_report_datetime(value: str) -> datetime:
+    parsed = parse_utc(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def cooldown_next_review(evidence_rows: list[CooldownEvidence], days: int) -> datetime:
+    latest_signal_at = max(
+        normalize_report_datetime(row.signal_at) for row in evidence_rows
+    )
+    return (latest_signal_at + timedelta(days=days)).replace(microsecond=0)
+
+
+def grouped_cooldown_recommendations(
+    *,
+    evidence_rows: list[CooldownEvidence],
+    as_of: datetime,
+    limit: int,
+) -> list[CooldownRecommendation]:
+    recommendations: list[CooldownRecommendation] = []
+
+    def add_grouped(
+        *,
+        signal: str,
+        recommendation_type: str,
+        reason: str,
+        review_days: int,
+        selected: list[CooldownEvidence],
+        group_key: str,
+        group_label: str,
+        group_type: str,
+        minimum_count: int,
+    ) -> None:
+        groups: dict[str, list[CooldownEvidence]] = {}
+        for evidence in selected:
+            key = group_key.format(
+                company_id=evidence.company_id,
+                company_name=evidence.company_name,
+                role_pattern=evidence.role_pattern,
+            )
+            groups.setdefault(key, []).append(evidence)
+        for key, rows in sorted(groups.items()):
+            if len(rows) < minimum_count:
+                continue
+            next_review_at = cooldown_next_review(rows, review_days)
+            if recommendation_type == "temporary" and next_review_at <= as_of:
+                continue
+            first = rows[0]
+            label = group_label.format(
+                company_id=first.company_id,
+                company_name=first.company_name,
+                role_pattern=first.role_pattern,
+            )
+            recommendations.append(
+                CooldownRecommendation(
+                    target_type=group_type,
+                    target_key=key,
+                    target_label=label,
+                    recommendation_type=recommendation_type,
+                    signal=signal,
+                    reason=reason,
+                    next_review_at=next_review_at.isoformat(),
+                    evidence=tuple(rows[:limit]),
+                )
+            )
+
+    no_screen = [
+        row
+        for row in evidence_rows
+        if row.signal == "repeated_no_screen_rejection"
+    ]
+    interview_loop = [
+        row
+        for row in evidence_rows
+        if row.signal == "interview_loop_cooldown"
+    ]
+    timing_capacity = [
+        row for row in evidence_rows if row.signal == "timing_capacity_cooldown"
+    ]
+    durable_low_priority = [
+        row
+        for row in evidence_rows
+        if row.signal == "durable_low_priority"
+    ]
+
+    common_group_specs = (
+        (
+            "company:{company_id}",
+            "company=#{company_id} {company_name}",
+            "company",
+        ),
+        (
+            "role_pattern:{role_pattern}",
+            "role_pattern={role_pattern}",
+            "role_pattern",
+        ),
+    )
+    for key_template, label_template, group_type in common_group_specs:
+        add_grouped(
+            signal="repeated_no_screen_rejection",
+            recommendation_type="temporary",
+            reason=(
+                "Repeated rejected_before_screen outcomes; pause similar outreach "
+                "until positioning or target criteria change."
+            ),
+            review_days=NO_INTERVIEW_COOLDOWN_DAYS,
+            selected=no_screen,
+            group_key=key_template,
+            group_label=label_template,
+            group_type=group_type,
+            minimum_count=2,
+        )
+        add_grouped(
+            signal="interview_loop_cooldown",
+            recommendation_type="temporary",
+            reason=(
+                "Interview loop ended without conversion; pause similar high-effort "
+                "work before re-entering the loop."
+            ),
+            review_days=INTERVIEW_LOOP_COOLDOWN_DAYS,
+            selected=interview_loop,
+            group_key=key_template,
+            group_label=label_template,
+            group_type=group_type,
+            minimum_count=1,
+        )
+        add_grouped(
+            signal="timing_capacity_cooldown",
+            recommendation_type="temporary",
+            reason=(
+                "Stored timing_or_capacity reason says the opportunity is not worth "
+                "the current queue slot."
+            ),
+            review_days=TIMING_CAPACITY_COOLDOWN_DAYS,
+            selected=timing_capacity,
+            group_key=key_template,
+            group_label=label_template,
+            group_type=group_type,
+            minimum_count=1,
+        )
+        add_grouped(
+            signal="durable_low_priority",
+            recommendation_type="durable",
+            reason=(
+                "Stored low_interest reason points to a durable pass or low-priority "
+                "decision."
+            ),
+            review_days=DURABLE_LOW_PRIORITY_REVIEW_DAYS,
+            selected=durable_low_priority,
+            group_key=key_template,
+            group_label=label_template,
+            group_type=group_type,
+            minimum_count=1,
+        )
+
+    recommendations.sort(
+        key=lambda recommendation: (
+            0 if recommendation.recommendation_type == "temporary" else 1,
+            recommendation.signal,
+            recommendation.target_type,
+            recommendation.target_key,
+        )
+    )
+    return recommendations[:limit]
+
+
+def format_cooldown_evidence(evidence: CooldownEvidence) -> str:
+    event = (
+        f"event=#{evidence.latest_event_id} {evidence.latest_event_type}"
+        f" at {evidence.latest_event_at}"
+        if evidence.latest_event_id is not None
+        else "event=missing"
+    )
+    action = (
+        f"action=#{evidence.latest_action_id} "
+        f"{evidence.latest_action_queue}/{evidence.latest_action_status}"
+        if evidence.latest_action_id is not None
+        else "action=missing"
+    )
+    return (
+        f"  - evidence job=#{evidence.job_id} {evidence.company_name} / "
+        f"{evidence.job_title} | status={evidence.job_status} | "
+        f"role_pattern={evidence.role_pattern} | "
+        f"outcome={evidence.application_outcome or 'none'} | "
+        f"reason={evidence.rejection_reason or 'none'} | {event} | {action}"
+    )
+
+
+def format_cooldown_recommendation(recommendation: CooldownRecommendation) -> list[str]:
+    lines = [
+        f"- type={recommendation.recommendation_type} | "
+        f"target={recommendation.target_label} | "
+        f"signal={recommendation.signal} | "
+        f"cooldown_reason={recommendation.reason} | "
+        f"suggested_next_review={recommendation.next_review_at} | "
+        f"evidence_count={len(recommendation.evidence)}"
+    ]
+    lines.extend(format_cooldown_evidence(evidence) for evidence in recommendation.evidence)
+    return lines
 
 
 def pipeline_status_to_job_status(status: str | None) -> str:
@@ -5181,6 +5677,68 @@ def command_report_hygiene(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_report_cooldowns(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_current_database_read_only(db_path)
+    as_of = parse_report_as_of(args.as_of)
+    if args.limit <= 0:
+        raise ValueError("report cooldowns --limit must be a positive integer")
+
+    with closing(connect(db_path)) as connection:
+        record_count = command_center_record_count(connection)
+        evidence_rows = cooldown_evidence_rows(connection, as_of=as_of)
+        recommendations = grouped_cooldown_recommendations(
+            evidence_rows=evidence_rows,
+            as_of=as_of,
+            limit=args.limit,
+        )
+
+    print(f"Cooldown recommendations report as_of={as_of.isoformat()}")
+    print(
+        "Thresholds: "
+        f"no_interview_days={NO_INTERVIEW_COOLDOWN_DAYS} | "
+        f"interview_loop_days={INTERVIEW_LOOP_COOLDOWN_DAYS} | "
+        f"timing_capacity_days={TIMING_CAPACITY_COOLDOWN_DAYS} | "
+        f"durable_low_priority_review_days={DURABLE_LOW_PRIORITY_REVIEW_DAYS}"
+    )
+    print("Mode: advisory read-only; no company, job, action, or due-date changes applied.")
+    if record_count == 0:
+        print("No command center data.")
+        print("Next step: record outcomes before reviewing cooldown recommendations.")
+        return 0
+    if not recommendations:
+        print("No cooldown recommendations from stored outcome evidence.")
+        return 0
+
+    temporary = [
+        recommendation
+        for recommendation in recommendations
+        if recommendation.recommendation_type == "temporary"
+    ]
+    durable = [
+        recommendation
+        for recommendation in recommendations
+        if recommendation.recommendation_type == "durable"
+    ]
+
+    print("Temporary cooldown recommendations:")
+    if temporary:
+        for recommendation in temporary:
+            for line in format_cooldown_recommendation(recommendation):
+                print(line)
+    else:
+        print("- none")
+
+    print("Durable pass / low-priority recommendations:")
+    if durable:
+        for recommendation in durable:
+            for line in format_cooldown_recommendation(recommendation):
+                print(line)
+    else:
+        print("- none")
+    return 0
+
+
 def command_action_next(args: argparse.Namespace) -> int:
     db_path = Path(args.db_path)
     require_database(db_path)
@@ -5767,6 +6325,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=HYGIENE_UNSCHEDULED_ACTION_DAYS,
     )
+    cooldowns = report_subparsers.add_parser(
+        "cooldowns",
+        help="Show advisory cooldown recommendations from recorded outcomes.",
+    )
+    cooldowns.add_argument("--as-of")
+    cooldowns.add_argument("--limit", type=int, default=COOLDOWN_RECOMMENDATION_LIMIT)
 
     return parser.parse_args()
 
@@ -5983,6 +6547,8 @@ def main() -> int:
         if args.command == "report":
             if args.report_command == "hygiene":
                 return command_report_hygiene(args)
+            if args.report_command == "cooldowns":
+                return command_report_cooldowns(args)
         if args.command == "action":
             if args.action_command == "add":
                 return command_action_add(args)

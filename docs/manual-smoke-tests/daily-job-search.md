@@ -54,6 +54,7 @@ Source of truth: `APPLICATIONS/_ops/job_search.sqlite`.
 
   ```bash
   python3 scripts/job_search.py metrics
+  python3 scripts/job_search.py report cooldowns
   ```
 
   Evidence on failure: capture the full command output and exit code.
@@ -117,6 +118,7 @@ ACTION_ID="$(
 )"
 python3 scripts/job_search.py --db-path "$DB" action done "$ACTION_ID"
 python3 scripts/job_search.py --db-path "$DB" metrics
+python3 scripts/job_search.py --db-path "$DB" report cooldowns
 ```
 
 Expected evidence:
@@ -126,3 +128,5 @@ Expected evidence:
 - `event list --company "Smoke Test Sentinel"` shows the temporary note.
 - `action done "$ACTION_ID"` succeeds.
 - `metrics` prints command-center counts without errors.
+- `report cooldowns` prints advisory read-only mode and either no
+  recommendations or recommendation rows with evidence.
