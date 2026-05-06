@@ -1786,6 +1786,200 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertIn("default_repeatable=false", result.stdout)
             self.assertIn("product manager access reviews", result.stdout)
 
+    def test_report_query_pack_tuning_uses_reviewed_results_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(
+                db_path,
+                "company",
+                "add",
+                "ExistingCo",
+            )
+            self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "ExistingCo",
+                "Senior Product Manager",
+                "--url",
+                "https://jobs.example.com/existing/senior-pm",
+            )
+            registry_before = JOB_SEARCH.QUERY_PACK_REGISTRY_PATH.read_text(
+                encoding="utf-8"
+            )
+            payload_path = Path(tmpdir) / "query-run.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "source": "linkedin_mcp",
+                        "pack": "FINTECH",
+                        "query": "senior product manager payroll",
+                        "notes": "search_noisy: run-level note must not drive tuning",
+                        "results": [
+                            {
+                                "company": "GoodCo",
+                                "title": "Senior Product Manager, Payroll",
+                                "url": "https://jobs.example.com/good/payroll",
+                                "status": "accepted",
+                                "notes": "strong payroll platform fit",
+                            },
+                            {
+                                "company": "NoiseCo",
+                                "title": "Engineering Manager, Payroll",
+                                "url": "https://jobs.example.com/noise/engineering",
+                                "status": "rejected",
+                                "notes": "search_noisy: people-management-heavy result",
+                            },
+                            {
+                                "company": "ThinCo",
+                                "title": "Product Manager",
+                                "url": "https://jobs.example.com/thin/pm",
+                                "status": "rejected",
+                                "notes": "stale_or_thin_result: posting closed or too thin",
+                            },
+                            {
+                                "company": "ExistingCo",
+                                "title": "Senior Product Manager",
+                                "url": "https://jobs.example.com/existing/senior-pm",
+                                "status": "accepted",
+                            },
+                            {
+                                "company": "PendingCo",
+                                "title": "Product Manager, Payroll",
+                                "url": "https://jobs.example.com/pending/payroll",
+                                "status": "pending",
+                                "notes": "search_noisy: pending raw hit must not drive tuning",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.run_cli(db_path, "query", "import", "--file", str(payload_path))
+
+            result = self.run_cli(db_path, "report", "query-pack-tuning")
+
+            self.assertIn("reviewed=4 pending_ignored=1", result.stdout)
+            self.assertIn("Noisy queries:", result.stdout)
+            self.assertIn("noisy=1 noisy_rate=25.0%", result.stdout)
+            self.assertIn("Stale/thin sources:", result.stdout)
+            self.assertIn("stale_thin=1 stale_thin_rate=25.0%", result.stdout)
+            self.assertIn("Duplicate patterns:", result.stdout)
+            self.assertIn("duplicates=1 duplicate_rate=25.0%", result.stdout)
+            self.assertIn("Strong accepted patterns:", result.stdout)
+            self.assertIn("accepted=1 accepted_rate=25.0%", result.stdout)
+            self.assertIn("edit=tighten_or_pause", result.stdout)
+            self.assertIn("edit=prefer_canonical_or_official_source", result.stdout)
+            self.assertIn("edit=dedupe_or_reduce_overlap", result.stdout)
+            self.assertIn("edit=preserve_or_expand", result.stdout)
+            self.assertNotIn("PendingCo", result.stdout)
+            self.assertEqual(
+                registry_before,
+                JOB_SEARCH.QUERY_PACK_REGISTRY_PATH.read_text(encoding="utf-8"),
+            )
+
+    def test_report_query_pack_tuning_preserves_exception_reason_guardrail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            payload_path = Path(tmpdir) / "access-query-run.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "source": "manual_browser",
+                        "pack": "ACCESS",
+                        "query": "product manager access reviews",
+                        "notes": "reason=specific access/trust target role at Okta",
+                        "results": [
+                            {
+                                "company": "Okta",
+                                "title": "Product Manager, Access Reviews",
+                                "url": "https://jobs.example.com/okta/access-reviews",
+                                "status": "accepted",
+                                "notes": "access workflow match",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.run_cli(db_path, "query", "import", "--file", str(payload_path))
+
+            result = self.run_cli(db_path, "report", "query-pack-tuning")
+
+            self.assertIn("pack=ACCESS", result.stdout)
+            self.assertIn("edit=preserve_exception_guardrail", result.stdout)
+            self.assertIn(
+                "preserve explicit exception reason: "
+                "reason=specific access/trust target role at Okta",
+                result.stdout,
+            )
+
+    def test_report_query_pack_tuning_flags_exception_pack_without_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            fintech_payload_path = Path(tmpdir) / "fintech-query-run.json"
+            fintech_payload_path.write_text(
+                json.dumps(
+                    {
+                        "source": "linkedin_mcp",
+                        "pack": "FINTECH",
+                        "query": "senior product manager payroll",
+                        "results": [
+                            {
+                                "company": "GoodCo",
+                                "title": "Senior Product Manager, Payroll",
+                                "url": "https://jobs.example.com/good/payroll",
+                                "status": "accepted",
+                                "notes": "strong payroll platform fit",
+                            },
+                            {
+                                "company": "NoiseCo",
+                                "title": "Engineering Manager, Payroll",
+                                "url": "https://jobs.example.com/noise/engineering",
+                                "status": "rejected",
+                                "notes": "search_noisy: people-management-heavy result",
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.run_cli(db_path, "query", "import", "--file", str(fintech_payload_path))
+            payload_path = Path(tmpdir) / "access-query-run.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "source": "manual_browser",
+                        "pack": "ACCESS",
+                        "query": "product manager access reviews",
+                        "notes": "search_noisy: broad exception run without explicit rationale",
+                        "results": [
+                            {
+                                "company": "Okta",
+                                "title": "Product Manager, Access Reviews",
+                                "url": "https://jobs.example.com/okta/access-reviews",
+                                "status": "accepted",
+                                "notes": "access workflow match",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.run_cli(db_path, "query", "import", "--file", str(payload_path))
+
+            result = self.run_cli(db_path, "report", "query-pack-tuning", "--limit", "1")
+
+            self.assertIn("pack=ACCESS", result.stdout)
+            self.assertIn("edit=preserve_exception_guardrail", result.stdout)
+            self.assertIn(
+                "do not promote or repeat until an explicit exception reason is recorded",
+                result.stdout,
+            )
+
     def test_company_import_adds_multiple_researched_companies_and_sources(
         self,
     ) -> None:

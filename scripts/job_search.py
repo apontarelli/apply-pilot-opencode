@@ -88,6 +88,11 @@ NOISY_QUERY_RESULT_MARKERS = (
     "stale_or_thin_result",
     "detail_validation_failed",
 )
+QUERY_TUNING_NOISY_MARKERS = ("search_noisy", "malformed_payload")
+QUERY_TUNING_STALE_THIN_MARKERS = (
+    "stale_or_thin_result",
+    "detail_validation_failed",
+)
 POLL_SCREEN_FIT_SCORE = 75
 POLL_IGNORED_FIT_SCORE = 35
 HTTP_TIMEOUT_SECONDS = 20
@@ -5688,6 +5693,376 @@ def count_noisy_query_results(rows: list[sqlite3.Row]) -> int:
     return count
 
 
+def query_tuning_note_text(row: sqlite3.Row) -> str:
+    return " ".join(
+        str(row[field]).casefold()
+        for field in ("result_notes", "duplicate_reason")
+        if row[field]
+    )
+
+
+def query_tuning_marker_count(
+    rows: list[sqlite3.Row],
+    markers: tuple[str, ...],
+) -> int:
+    return sum(
+        1
+        for row in rows
+        if any(marker in query_tuning_note_text(row) for marker in markers)
+    )
+
+
+def query_tuning_marker_rows(
+    rows: list[sqlite3.Row],
+    markers: tuple[str, ...],
+) -> list[sqlite3.Row]:
+    return [
+        row
+        for row in rows
+        if any(marker in query_tuning_note_text(row) for marker in markers)
+    ]
+
+
+def query_tuning_samples(rows: list[sqlite3.Row], *, limit: int = 3) -> str:
+    samples = []
+    for row in rows:
+        company = row["company_name"] or "Unknown"
+        samples.append(f"{company} / {row['title']}")
+        if len(samples) == limit:
+            break
+    return "; ".join(samples) if samples else "none"
+
+
+def query_tuning_reason(row: sqlite3.Row) -> str:
+    for field in ("result_notes", "duplicate_reason", "run_notes"):
+        if row[field]:
+            return str(row[field]).strip()
+    return "reviewed query-run outcome"
+
+
+def query_tuning_explicit_reason(notes: str) -> str | None:
+    match = re.search(r"(?:^|[\s;])reason=([^;\n]+)", notes)
+    if match is None:
+        return None
+    reason = match.group(1).strip()
+    return f"reason={reason}" if reason else None
+
+
+def query_tuning_exception_reason(rows: list[sqlite3.Row]) -> str | None:
+    for row in rows:
+        notes = str(row["run_notes"] or "").strip()
+        reason = query_tuning_explicit_reason(notes)
+        if reason:
+            return reason
+    return None
+
+
+def format_query_tuning_line(
+    *,
+    pack: str,
+    query: str,
+    reviewed: int,
+    count_name: str,
+    count: int,
+    rate_name: str,
+    samples: str,
+    action: str,
+) -> str:
+    return (
+        f"- pack={pack} query={json.dumps(query)} reviewed={reviewed} "
+        f"{count_name}={count} {rate_name}={percent(count, reviewed)} "
+        f"samples={json.dumps(samples)} action={json.dumps(action)}"
+    )
+
+
+def command_report_query_pack_tuning(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_current_database_read_only(db_path)
+    if args.limit <= 0:
+        raise ValueError("report query-pack-tuning --limit must be a positive integer")
+
+    packs = load_query_pack_registry()
+    with closing(connect(db_path)) as connection:
+        reviewed_rows = connection.execute(
+            """
+            SELECT query_runs.id AS query_run_id, query_runs.source,
+                query_runs.pack, query_runs.query_text, query_runs.notes AS run_notes,
+                query_run_results.company_name, query_run_results.title,
+                query_run_results.result_status,
+                query_run_results.duplicate_reason,
+                query_run_results.notes AS result_notes
+            FROM query_run_results
+            JOIN query_runs ON query_runs.id = query_run_results.query_run_id
+            WHERE query_run_results.result_status != 'pending'
+            ORDER BY query_runs.pack, query_runs.query_text,
+                query_run_results.ordinal, query_run_results.id
+            """
+        ).fetchall()
+        pending_count = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM query_run_results
+            WHERE result_status = 'pending'
+            """
+        ).fetchone()[0]
+
+    print("Query-pack tuning report")
+    print(
+        f"Basis: reviewed query_run_results only | reviewed={len(reviewed_rows)} "
+        f"pending_ignored={pending_count}"
+    )
+    print(
+        "Source-quality boundary: source-quality reasons stay in "
+        "query_run_results.notes and are not job rejection taxonomy."
+    )
+    print("Config: read-only; config/job_search_query_packs.json was not edited.")
+    if not reviewed_rows:
+        print("No reviewed query-run results.")
+        print("Next step: review query_run_results before tuning packs.")
+        return 0
+
+    grouped: dict[tuple[str, str], list[sqlite3.Row]] = {}
+    for row in reviewed_rows:
+        pack = str(row["pack"] or "unset")
+        grouped.setdefault((pack, str(row["query_text"])), []).append(row)
+
+    summaries: list[dict[str, object]] = []
+    for (pack_name, query_text), rows in grouped.items():
+        reviewed = len(rows)
+        accepted_rows = [row for row in rows if row["result_status"] == "accepted"]
+        rejected_rows = [row for row in rows if row["result_status"] == "rejected"]
+        duplicate_rows = [row for row in rows if row["result_status"] == "duplicate"]
+        noisy_count = query_tuning_marker_count(rows, QUERY_TUNING_NOISY_MARKERS)
+        noisy_rows = query_tuning_marker_rows(rows, QUERY_TUNING_NOISY_MARKERS)
+        stale_thin_count = query_tuning_marker_count(
+            rows, QUERY_TUNING_STALE_THIN_MARKERS
+        )
+        stale_thin_rows = query_tuning_marker_rows(
+            rows, QUERY_TUNING_STALE_THIN_MARKERS
+        )
+        pack = packs.get(pack_name)
+        summaries.append(
+            {
+                "pack": pack_name,
+                "query": query_text,
+                "pack_type": pack.pack_type if pack else "unknown",
+                "reviewed": reviewed,
+                "accepted_rows": accepted_rows,
+                "rejected_rows": rejected_rows,
+                "duplicate_rows": duplicate_rows,
+                "noisy_count": noisy_count,
+                "noisy_rows": noisy_rows,
+                "stale_thin_count": stale_thin_count,
+                "stale_thin_rows": stale_thin_rows,
+                "rows": rows,
+                "exception_reason": (
+                    query_tuning_exception_reason(rows)
+                    if pack and pack.pack_type == "exception"
+                    else None
+                ),
+            }
+        )
+
+    def limited(items: list[dict[str, object]]) -> list[dict[str, object]]:
+        return items[: args.limit]
+
+    def candidate_edit_count(item: dict[str, object]) -> int:
+        duplicate_rows = item["duplicate_rows"]
+        accepted_rows = item["accepted_rows"]
+        assert isinstance(duplicate_rows, list)
+        assert isinstance(accepted_rows, list)
+        return (
+            int(item["noisy_count"])
+            + int(item["stale_thin_count"])
+            + len(duplicate_rows)
+            + len(accepted_rows)
+        )
+
+    print("Noisy queries:")
+    noisy = sorted(
+        (item for item in summaries if int(item["noisy_count"]) > 0),
+        key=lambda item: (-int(item["noisy_count"]), str(item["pack"]), str(item["query"])),
+    )
+    if noisy:
+        for item in limited(noisy):
+            rows = item["rows"]
+            assert isinstance(rows, list)
+            noisy_rows = item["noisy_rows"]
+            assert isinstance(noisy_rows, list)
+            print(
+                format_query_tuning_line(
+                    pack=str(item["pack"]),
+                    query=str(item["query"]),
+                    reviewed=int(item["reviewed"]),
+                    count_name="noisy",
+                    count=int(item["noisy_count"]),
+                    rate_name="noisy_rate",
+                    samples=query_tuning_samples(noisy_rows),
+                    action="tighten query terms or pause broad source pattern",
+                )
+            )
+    else:
+        print("- none")
+
+    print("Stale/thin sources:")
+    stale = sorted(
+        (item for item in summaries if int(item["stale_thin_count"]) > 0),
+        key=lambda item: (
+            -int(item["stale_thin_count"]),
+            str(item["pack"]),
+            str(item["query"]),
+        ),
+    )
+    if stale:
+        for item in limited(stale):
+            rows = item["rows"]
+            assert isinstance(rows, list)
+            stale_thin_rows = item["stale_thin_rows"]
+            assert isinstance(stale_thin_rows, list)
+            print(
+                format_query_tuning_line(
+                    pack=str(item["pack"]),
+                    query=str(item["query"]),
+                    reviewed=int(item["reviewed"]),
+                    count_name="stale_thin",
+                    count=int(item["stale_thin_count"]),
+                    rate_name="stale_thin_rate",
+                    samples=query_tuning_samples(stale_thin_rows),
+                    action="validate canonical postings or prefer ATS/official sources",
+                )
+            )
+    else:
+        print("- none")
+
+    print("Duplicate patterns:")
+    duplicates = sorted(
+        (item for item in summaries if len(item["duplicate_rows"]) > 0),
+        key=lambda item: (
+            -len(item["duplicate_rows"]),
+            str(item["pack"]),
+            str(item["query"]),
+        ),
+    )
+    if duplicates:
+        for item in limited(duplicates):
+            duplicate_rows = item["duplicate_rows"]
+            assert isinstance(duplicate_rows, list)
+            reason = query_tuning_reason(duplicate_rows[0])
+            print(
+                format_query_tuning_line(
+                    pack=str(item["pack"]),
+                    query=str(item["query"]),
+                    reviewed=int(item["reviewed"]),
+                    count_name="duplicates",
+                    count=len(duplicate_rows),
+                    rate_name="duplicate_rate",
+                    samples=query_tuning_samples(duplicate_rows),
+                    action=f"dedupe by existing roles; reason={reason}",
+                )
+            )
+    else:
+        print("- none")
+
+    print("Strong accepted patterns:")
+    accepted = sorted(
+        (item for item in summaries if len(item["accepted_rows"]) > 0),
+        key=lambda item: (
+            -len(item["accepted_rows"]),
+            str(item["pack"]),
+            str(item["query"]),
+        ),
+    )
+    if accepted:
+        for item in limited(accepted):
+            accepted_rows = item["accepted_rows"]
+            assert isinstance(accepted_rows, list)
+            print(
+                format_query_tuning_line(
+                    pack=str(item["pack"]),
+                    query=str(item["query"]),
+                    reviewed=int(item["reviewed"]),
+                    count_name="accepted",
+                    count=len(accepted_rows),
+                    rate_name="accepted_rate",
+                    samples=query_tuning_samples(accepted_rows),
+                    action="preserve or expand this query pattern",
+                )
+            )
+    else:
+        print("- none")
+
+    print("Candidate pack edits:")
+    edit_count = 0
+    candidate_edits = sorted(
+        (item for item in summaries if candidate_edit_count(item) > 0),
+        key=lambda item: (
+            -candidate_edit_count(item),
+            str(item["pack"]),
+            str(item["query"]),
+        ),
+    )
+    for item in limited(candidate_edits):
+        pack_name = str(item["pack"])
+        query_text = str(item["query"])
+        if int(item["noisy_count"]) > 0:
+            noisy_rows = item["noisy_rows"]
+            assert isinstance(noisy_rows, list)
+            edit_count += 1
+            print(
+                f"- pack={pack_name} query={json.dumps(query_text)} "
+                "edit=tighten_or_pause "
+                f"reason={json.dumps(query_tuning_reason(noisy_rows[0]))}"
+            )
+        if int(item["stale_thin_count"]) > 0:
+            stale_thin_rows = item["stale_thin_rows"]
+            assert isinstance(stale_thin_rows, list)
+            edit_count += 1
+            print(
+                f"- pack={pack_name} query={json.dumps(query_text)} "
+                "edit=prefer_canonical_or_official_source "
+                f"reason={json.dumps(query_tuning_reason(stale_thin_rows[0]))}"
+            )
+        duplicate_rows = item["duplicate_rows"]
+        assert isinstance(duplicate_rows, list)
+        if duplicate_rows:
+            edit_count += 1
+            print(
+                f"- pack={pack_name} query={json.dumps(query_text)} "
+                "edit=dedupe_or_reduce_overlap "
+                f"reason={json.dumps(query_tuning_reason(duplicate_rows[0]))}"
+            )
+        accepted_rows = item["accepted_rows"]
+        assert isinstance(accepted_rows, list)
+        if accepted_rows:
+            edit_count += 1
+            print(
+                f"- pack={pack_name} query={json.dumps(query_text)} "
+                "edit=preserve_or_expand "
+                f"reason={json.dumps(query_tuning_reason(accepted_rows[0]))}"
+            )
+    exception_guardrails = sorted(
+        (item for item in summaries if item["pack_type"] == "exception"),
+        key=lambda item: (str(item["pack"]), str(item["query"])),
+    )
+    for item in exception_guardrails:
+        pack_name = str(item["pack"])
+        query_text = str(item["query"])
+        reason = item["exception_reason"]
+        if reason:
+            action = f"preserve explicit exception reason: {reason}"
+        else:
+            action = "do not promote or repeat until an explicit exception reason is recorded"
+        edit_count += 1
+        print(
+            f"- pack={pack_name} query={json.dumps(query_text)} "
+            "edit=preserve_exception_guardrail "
+            f"reason={json.dumps(action)}"
+        )
+    if edit_count == 0:
+        print("- none")
+    return 0
+
+
 def command_metrics(args: argparse.Namespace) -> int:
     db_path = Path(args.db_path)
     require_database(db_path)
@@ -6826,7 +7201,7 @@ def parse_args() -> argparse.Namespace:
     metrics.add_argument("--since")
     metrics.add_argument("--until")
     metrics.add_argument("--days", type=int, default=7)
-    report = subparsers.add_parser("report", help="Show read-only hygiene reports.")
+    report = subparsers.add_parser("report", help="Show read-only reports.")
     report_subparsers = report.add_subparsers(
         dest="report_command", metavar="command", required=True
     )
@@ -6865,6 +7240,11 @@ def parse_args() -> argparse.Namespace:
     proof_gaps.add_argument("--limit", type=int, default=20)
     proof_gaps.add_argument("--evidence-limit", type=int, default=4)
     proof_gaps.add_argument("--one-off-limit", type=int, default=5)
+    query_pack_tuning = report_subparsers.add_parser(
+        "query-pack-tuning",
+        help="Recommend query-pack tuning from reviewed query-run results.",
+    )
+    query_pack_tuning.add_argument("--limit", type=int, default=20)
 
     return parser.parse_args()
 
@@ -7085,6 +7465,8 @@ def main() -> int:
                 return command_report_cooldowns(args)
             if args.report_command == "proof-gaps":
                 return command_report_proof_gaps(args)
+            if args.report_command == "query-pack-tuning":
+                return command_report_query_pack_tuning(args)
         if args.command == "action":
             if args.action_command == "add":
                 return command_action_add(args)
