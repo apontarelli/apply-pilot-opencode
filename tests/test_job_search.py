@@ -1249,6 +1249,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertIn("payments risk controls", result.stdout)
             self.assertIn("strength=recurring", result.stdout)
             self.assertIn("improvement=artifact", result.stdout)
+            self.assertIn("routing=linear_candidate", result.stdout)
             self.assertIn("jobs=2", result.stdout)
             self.assertIn("companies=2", result.stdout)
             self.assertIn("lanes=FINTECH", result.stdout)
@@ -1281,7 +1282,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                         company_b,
                         lane="AI",
                         rejection_reason="missing_proof",
-                        artifact_opportunity="workflow automation ROI",
+                        artifact_opportunity="ROI from workflow automation",
                     )
                     job_c = self.insert_job(
                         connection,
@@ -1300,7 +1301,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                         connection,
                         company_b,
                         job_b,
-                        description="Missing proof: workflow automation ROI",
+                        description="Missing proof: ROI from workflow automation",
                     )
                     self.insert_gap(
                         connection,
@@ -1314,7 +1315,11 @@ class JobSearchDatabaseTests(unittest.TestCase):
             recurring_index = result.stdout.index("workflow automation roi")
             one_off_index = result.stdout.index("treasury operations")
             self.assertLess(recurring_index, one_off_index)
-            self.assertIn("workflow automation roi | strength=recurring", result.stdout)
+            self.assertIn(
+                "workflow automation roi | strength=recurring",
+                result.stdout,
+            )
+            self.assertIn("improvement=resume lane | routing=sqlite", result.stdout)
             self.assertIn("treasury operations | strength=one_off", result.stdout)
             self.assertIn("Lower-signal one-offs:", result.stdout)
 

@@ -149,7 +149,8 @@ from structured `gaps`, `jobs.rejection_reason`, artifact opportunities, linked
 actions, and linked events, then ranks recurring patterns above one-off gaps.
 Each recommendation shows strength, score, suggested improvement type
 (`profile`, `bullet`, `artifact`, `resume lane`, or `application playbook`),
-job/company/lane/status counts, and supporting evidence IDs.
+job/company/lane/status counts, SQLite-vs-Linear routing guidance, and
+supporting evidence IDs.
 
 Keep role- and company-specific relevance in SQLite when the gap is still a
 screening reason, rejection reason, open command-center action, or small
