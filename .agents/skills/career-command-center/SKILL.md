@@ -110,6 +110,54 @@ Treat queues as operator surfaces:
 Do not create duplicate actions when an existing open action already captures
 the next step. Update or complete the current action instead.
 
+## Outcome Hygiene
+
+Own `classify` queue cleanup and weekly outcome hygiene in the command center.
+Use the exact operating taxonomy in `docs/HOW_IT_WORKS.md` when recording
+application dispositions or rejection reasons.
+
+Durable fields:
+
+- `jobs.status`: lifecycle state, set with
+  `python3 scripts/job_search.py job status <job_id> <status> --notes "..."` or
+  `job update`.
+- `jobs.application_outcome`: comparable disposition such as
+  `pending_response`, `active_interview_loop`, `rejected_before_screen`,
+  `rejected_after_screen`, `rejected_after_interview`, `closed_before_apply`,
+  `passed_by_candidate`, or `archived_no_action`.
+- `jobs.rejection_reason`: comparable reason such as `fit_mismatch`,
+  `level_scope_mismatch`, `recruiter_screen_risk`, `missing_proof`,
+  `compensation_mismatch`, `location_or_work_model_mismatch`,
+  `timing_or_capacity`, `stale_or_closed_posting`,
+  `duplicate_or_already_tracked`, or `low_interest`.
+- `events.notes` and `actions.notes`: evidence and handoff detail.
+
+Use taxonomy values for anything that should group in metrics or strategy
+feedback. Use freeform notes for the proof behind the classification: recruiter
+feedback, comp number, screen-risk detail, source link, or why the operator chose
+the bucket.
+
+Common classify flow:
+
+```bash
+python3 scripts/job_search.py action next --queue classify --limit 10
+python3 scripts/job_search.py job update <job_id> --status rejected --application-outcome rejected_before_screen --rejection-reason recruiter_screen_risk
+python3 scripts/job_search.py event add --company "Company" --job-id <job_id> --type rejection_received --notes "Auto-reject after submit; likely PM-years/title screen."
+python3 scripts/job_search.py action done <action_id> --notes "classified outcome=rejected_before_screen reason=recruiter_screen_risk"
+```
+
+For stale `applied` or `interviewing` jobs, choose the current known disposition
+instead of leaving the hygiene item open: `pending_response`,
+`active_interview_loop`, `rejected_after_screen`, `rejected_after_interview`,
+`passed_by_candidate`, or `archived_no_action`. Reserve `closed_before_apply`
+for roles that closed before submission.
+
+Keep broad query source-quality reasons out of job outcomes. `search_noisy`,
+`malformed_payload`, `stale_or_thin_result`, `detail_validation_failed`, and
+duplicate/noisy broad-source rows stay in `query_run_results.notes` until
+SID-145 creates query-pack tuning reports. Only use job-level reasons after a
+result has become a command-center job.
+
 ## Decision Rules
 
 Every meaningful role or company review should end with one of:
