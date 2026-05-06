@@ -1566,7 +1566,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                         "YOUR_PROFILE/Fintech/FINTECH.md",
                         None,
                         None,
-                        "applied",
+                        "pending_response",
                     ),
                     (
                         "Relo Metrics",
@@ -2733,24 +2733,24 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertEqual(generated[1][:3], ("follow_up", "follow_up", "skipped"))
             self.assertIsNotNone(generated[1][3])
 
-    def test_job_update_accepts_outcome_taxonomy_values(self) -> None:
+    def test_job_add_accepts_documented_outcome_taxonomy_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "job_search.sqlite"
             self.run_cli(db_path, "init")
             self.run_cli(db_path, "company", "add", "Stripe")
-            self.run_cli(db_path, "job", "add", "Stripe", "Product Manager")
 
             self.run_cli(
                 db_path,
                 "job",
-                "update",
-                "1",
+                "add",
+                "Stripe",
+                "Product Manager",
                 "--status",
                 "rejected",
                 "--rejection-reason",
-                "missing_proof",
+                "fit_mismatch",
                 "--application-outcome",
-                "rejected_no_interview",
+                "rejected_before_screen",
             )
 
             with closing(self.connect(db_path)) as connection:
@@ -2764,8 +2764,51 @@ class JobSearchDatabaseTests(unittest.TestCase):
 
             self.assertEqual(
                 recorded[:],
-                ("rejected", "missing_proof", "rejected_no_interview"),
+                ("rejected", "fit_mismatch", "rejected_before_screen"),
             )
+
+    def test_job_update_accepts_all_documented_outcome_taxonomy_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Stripe")
+            self.run_cli(db_path, "job", "add", "Stripe", "Product Manager")
+
+            for outcome in JOB_SEARCH.APPLICATION_OUTCOMES:
+                with self.subTest(outcome=outcome):
+                    self.run_cli(
+                        db_path,
+                        "job",
+                        "update",
+                        "1",
+                        "--application-outcome",
+                        outcome,
+                    )
+
+                    with closing(self.connect(db_path)) as connection:
+                        recorded = connection.execute(
+                            "SELECT application_outcome FROM jobs WHERE id = 1"
+                        ).fetchone()
+
+                    self.assertEqual(recorded[0], outcome)
+
+            for reason in JOB_SEARCH.REJECTION_REASONS:
+                with self.subTest(reason=reason):
+                    self.run_cli(
+                        db_path,
+                        "job",
+                        "update",
+                        "1",
+                        "--rejection-reason",
+                        reason,
+                    )
+
+                    with closing(self.connect(db_path)) as connection:
+                        recorded = connection.execute(
+                            "SELECT rejection_reason FROM jobs WHERE id = 1"
+                        ).fetchone()
+
+                    self.assertEqual(recorded[0], reason)
 
     def test_job_update_rejects_non_taxonomy_values(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -2798,6 +2841,45 @@ class JobSearchDatabaseTests(unittest.TestCase):
 
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(f"invalid choice: '{value}'", result.stderr)
+
+    def test_job_help_exposes_documented_taxonomy_values_only(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(CLI), "job", "update", "--help"],
+            cwd=REPO_ROOT,
+            check=True,
+            text=True,
+            capture_output=True,
+        )
+
+        for value in (*JOB_SEARCH.APPLICATION_OUTCOMES, *JOB_SEARCH.REJECTION_REASONS):
+            with self.subTest(value=value):
+                self.assertIn(value, result.stdout)
+        self.assertNotIn("no_response", result.stdout)
+        self.assertNotIn("role_fit", result.stdout)
+
+    def test_legacy_application_outcome_maps_old_values_to_canonical(self) -> None:
+        self.assertEqual(
+            JOB_SEARCH.legacy_application_outcome(
+                {"recommendation": "rejected_after_loop"}, "rejected"
+            ),
+            "rejected_after_interview",
+        )
+        self.assertEqual(
+            JOB_SEARCH.legacy_application_outcome(
+                {"recommendation": "offer_received"}, "interviewing"
+            ),
+            "active_interview_loop",
+        )
+        self.assertEqual(
+            JOB_SEARCH.legacy_application_outcome(
+                {"recommendation": "offer_accepted"}, "applied"
+            ),
+            "active_interview_loop",
+        )
+        self.assertEqual(
+            JOB_SEARCH.legacy_application_outcome({}, "applied"),
+            "pending_response",
+        )
 
     def test_no_interview_rejection_creates_company_cooldown(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
