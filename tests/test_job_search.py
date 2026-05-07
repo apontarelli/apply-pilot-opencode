@@ -3292,6 +3292,368 @@ class JobSearchDatabaseTests(unittest.TestCase):
             )
             self.assertIn("reason=specific access target role", access.stdout)
 
+    def test_llm_ats_triage_audit_records_mercury_ledger_miss_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                connection.row_factory = sqlite3.Row
+                with connection:
+                    mercury_id = self.insert_company(connection, "Mercury")
+                    connection.execute(
+                        "UPDATE companies SET tier = 1, target_roles = ? WHERE id = ?",
+                        ("Product Manager, Payments", mercury_id),
+                    )
+                    job_id = self.insert_job(
+                        connection,
+                        mercury_id,
+                        title="Ledger Product Lead",
+                        lane="FINTECH",
+                        status="ignored_by_filter",
+                    )
+                    audit_id = JOB_SEARCH.record_llm_ats_triage_audit(
+                        connection,
+                        triage_input=JOB_SEARCH.LlmAtsTriageInput(
+                            company_name="Mercury",
+                            company_tier=1,
+                            title="Ledger Product Lead",
+                            canonical_url="https://boards.greenhouse.io/mercury/jobs/5832762004",
+                            source="greenhouse:mercury",
+                            source_job_id="5832762004",
+                            deterministic_status="ignored_by_filter",
+                            deterministic_reason="ignored_by_filter",
+                            job_id=job_id,
+                            poll_batch_key="mercury-2026-05-07",
+                        ),
+                        triage_output=JOB_SEARCH.LlmAtsTriageOutput(
+                            recommendation="screening",
+                            confidence=0.83,
+                            uncertainty=None,
+                            rationale="Ledger ownership is product-adjacent fintech platform work.",
+                            suggested_rule_improvements=("target_role:ledger",),
+                        ),
+                        raw_output='{"recommendation":"screening","confidence":0.83}',
+                        prompt_version="ats-triage-prompt-v1",
+                        schema_version="ats-triage-schema-v1",
+                        model="gpt-5.2",
+                        model_version="2026-05-01",
+                        malformed_reason=None,
+                        now=NOW,
+                    )
+
+                row = connection.execute(
+                    "SELECT * FROM llm_ats_triage_audits WHERE id = ?",
+                    (audit_id,),
+                ).fetchone()
+                job = connection.execute(
+                    "SELECT status, discovery_status, rejection_reason FROM jobs WHERE id = ?",
+                    (job_id,),
+                ).fetchone()
+
+            self.assertEqual(row["source_job_id"], "5832762004")
+            self.assertEqual(row["output_status"], "valid")
+            self.assertEqual(row["llm_recommendation"], "screening")
+            self.assertEqual(row["reconciliation"], "llm_rescues_ignored")
+            self.assertEqual(row["proposal_target"], "target_role")
+            self.assertIn("tier_1_company", row["eligibility_reason"])
+            self.assertEqual(row["prompt_version"], "ats-triage-prompt-v1")
+            self.assertEqual(row["schema_version"], "ats-triage-schema-v1")
+            self.assertRegex(row["input_hash"], r"^[0-9a-f]{64}$")
+            input_payload = json.loads(row["input_payload"])
+            self.assertEqual(input_payload["poll_batch_key"], "mercury-2026-05-07")
+            self.assertEqual(input_payload["source_job_id"], "5832762004")
+            self.assertEqual(tuple(job), ("ignored_by_filter", None, None))
+
+    def test_llm_ats_triage_audit_contrasts_non_pm_mercury_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    mercury_id = self.insert_company(connection, "Mercury")
+                    audit_id = JOB_SEARCH.record_llm_ats_triage_audit(
+                        connection,
+                        triage_input=JOB_SEARCH.LlmAtsTriageInput(
+                            company_name="Mercury",
+                            company_tier=1,
+                            title="Senior Backend Engineer, Risk",
+                            canonical_url="https://boards.greenhouse.io/mercury/jobs/999",
+                            source="greenhouse:mercury",
+                            source_job_id="999",
+                            deterministic_status="ignored_by_filter",
+                            deterministic_reason="ignored_by_filter",
+                            job_id=self.insert_job(
+                                connection,
+                                mercury_id,
+                                title="Senior Backend Engineer, Risk",
+                                status="ignored_by_filter",
+                            ),
+                        ),
+                        triage_output=JOB_SEARCH.LlmAtsTriageOutput(
+                            recommendation="pass",
+                            confidence=0.91,
+                            uncertainty=None,
+                            rationale="Engineering role, not PM/product-adjacent.",
+                        ),
+                        raw_output='{"recommendation":"pass","confidence":0.91}',
+                        prompt_version="ats-triage-prompt-v1",
+                        schema_version="ats-triage-schema-v1",
+                        model="gpt-5.2",
+                        model_version="2026-05-01",
+                        malformed_reason=None,
+                        now=NOW,
+                    )
+
+                row = connection.execute(
+                    "SELECT reconciliation, proposal_target FROM llm_ats_triage_audits WHERE id = ?",
+                    (audit_id,),
+                ).fetchone()
+
+            self.assertEqual(row, ("llm_agrees", None))
+
+    def test_llm_ats_triage_audit_records_screening_vs_llm_pass_as_rule_proposal_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "Stripe")
+                    job_id = self.insert_job(
+                        connection,
+                        company_id,
+                        title="Product Manager, Internal Tools",
+                        status="screening",
+                    )
+                    audit_id = JOB_SEARCH.record_llm_ats_triage_audit(
+                        connection,
+                        triage_input=JOB_SEARCH.LlmAtsTriageInput(
+                            company_name="Stripe",
+                            company_tier=1,
+                            title="Product Manager, Internal Tools",
+                            canonical_url="https://jobs.example.com/stripe/internal-tools",
+                            source="manual_browser",
+                            source_job_id=None,
+                            deterministic_status="screening",
+                            deterministic_reason="target_role_match",
+                            job_id=job_id,
+                        ),
+                        triage_output=JOB_SEARCH.LlmAtsTriageOutput(
+                            recommendation="pass",
+                            confidence=0.76,
+                            uncertainty=None,
+                            rationale="Too far from fintech/platform proof.",
+                        ),
+                        raw_output='{"recommendation":"pass","confidence":0.76}',
+                        prompt_version="ats-triage-prompt-v1",
+                        schema_version="ats-triage-schema-v1",
+                        model="gpt-5.2",
+                        model_version="2026-05-01",
+                        malformed_reason=None,
+                        now=NOW,
+                    )
+
+                row = connection.execute(
+                    "SELECT reconciliation, proposal_target, proposal_reason FROM llm_ats_triage_audits WHERE id = ?",
+                    (audit_id,),
+                ).fetchone()
+                status = connection.execute(
+                    "SELECT status FROM jobs WHERE id = ?",
+                    (job_id,),
+                ).fetchone()[0]
+
+            self.assertEqual(row[0], "llm_passes_screening")
+            self.assertEqual(row[1], "filter_rule")
+            self.assertIn("human approval", row[2])
+            self.assertEqual(status, "screening")
+
+    def test_llm_ats_triage_audit_records_malformed_and_uncertain_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "Ramp")
+                    base = JOB_SEARCH.LlmAtsTriageInput(
+                        company_name="Ramp",
+                        company_tier=1,
+                        title="Product Manager, Spend Management",
+                        canonical_url="https://jobs.example.com/ramp/spend-pm",
+                        source="manual_browser",
+                        source_job_id=None,
+                        deterministic_status="screening",
+                        deterministic_reason="target_role_match",
+                        job_id=self.insert_job(
+                            connection,
+                            company_id,
+                            title="Product Manager, Spend Management",
+                            status="screening",
+                        ),
+                    )
+                    malformed_id = JOB_SEARCH.record_llm_ats_triage_audit(
+                        connection,
+                        triage_input=base,
+                        triage_output=None,
+                        raw_output="{not-json",
+                        prompt_version="ats-triage-prompt-v1",
+                        schema_version="ats-triage-schema-v1",
+                        model="gpt-5.2",
+                        model_version="2026-05-01",
+                        malformed_reason="invalid_json",
+                        now=NOW,
+                    )
+                    uncertain_id = JOB_SEARCH.record_llm_ats_triage_audit(
+                        connection,
+                        triage_input=base,
+                        triage_output=JOB_SEARCH.LlmAtsTriageOutput(
+                            recommendation="uncertain",
+                            confidence=0.42,
+                            uncertainty="Posting lacks role scope.",
+                            rationale=None,
+                        ),
+                        raw_output='{"recommendation":"uncertain","confidence":0.42}',
+                        prompt_version="ats-triage-prompt-v1",
+                        schema_version="ats-triage-schema-v1",
+                        model="gpt-5.2",
+                        model_version="2026-05-01",
+                        malformed_reason=None,
+                        now=NOW,
+                    )
+
+                rows = connection.execute(
+                    """
+                    SELECT output_status, reconciliation, malformed_reason, uncertainty
+                    FROM llm_ats_triage_audits
+                    WHERE id IN (?, ?)
+                    ORDER BY id
+                    """,
+                    (malformed_id, uncertain_id),
+                ).fetchall()
+
+            self.assertEqual(
+                rows,
+                [
+                    ("malformed", "llm_malformed", "invalid_json", None),
+                    ("uncertain", "llm_uncertain", None, "Posting lacks role scope."),
+                ],
+            )
+
+    def test_llm_ats_triage_audit_coerces_invalid_structured_output_to_malformed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "Mercury")
+                    audit_id = JOB_SEARCH.record_llm_ats_triage_audit(
+                        connection,
+                        triage_input=JOB_SEARCH.LlmAtsTriageInput(
+                            company_name="Mercury",
+                            company_tier=1,
+                            title="Product Manager, Ledger",
+                            canonical_url="https://boards.greenhouse.io/mercury/jobs/5832762004",
+                            source="greenhouse:mercury",
+                            source_job_id="5832762004",
+                            deterministic_status="ignored_by_filter",
+                            deterministic_reason="ignored_by_filter",
+                            job_id=self.insert_job(
+                                connection,
+                                company_id,
+                                title="Product Manager, Ledger",
+                                status="ignored_by_filter",
+                            ),
+                        ),
+                        triage_output=JOB_SEARCH.LlmAtsTriageOutput(
+                            recommendation="maybe",
+                            confidence=1.5,
+                            uncertainty=None,
+                            rationale="Schema drift produced invalid values.",
+                        ),
+                        raw_output='{"recommendation":"maybe","confidence":1.5}',
+                        prompt_version="ats-triage-prompt-v1",
+                        schema_version="ats-triage-schema-v1",
+                        model="gpt-5.2",
+                        model_version="2026-05-01",
+                        malformed_reason=None,
+                        now=NOW,
+                    )
+
+                row = connection.execute(
+                    """
+                    SELECT output_status, llm_recommendation, confidence,
+                        malformed_reason, reconciliation, raw_output
+                    FROM llm_ats_triage_audits
+                    WHERE id = ?
+                    """,
+                    (audit_id,),
+                ).fetchone()
+
+            self.assertEqual(row[0], "malformed")
+            self.assertIsNone(row[1])
+            self.assertIsNone(row[2])
+            self.assertIn("invalid_recommendation:maybe", row[3])
+            self.assertIn("invalid_confidence:1.5", row[3])
+            self.assertEqual(row[4], "llm_malformed")
+            self.assertIn('"recommendation":"maybe"', row[5])
+
+    def test_llm_ats_triage_audit_records_duplicate_as_proposal_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "Mercury")
+                    duplicate_id = self.insert_job(
+                        connection,
+                        company_id,
+                        title="Product Manager, Ledger",
+                        status="screening",
+                    )
+                    audit_id = JOB_SEARCH.record_llm_ats_triage_audit(
+                        connection,
+                        triage_input=JOB_SEARCH.LlmAtsTriageInput(
+                            company_name="Mercury",
+                            company_tier=1,
+                            title="Product Manager, Ledger",
+                            canonical_url="https://boards.greenhouse.io/mercury/jobs/5832762004",
+                            source="greenhouse:mercury",
+                            source_job_id="5832762004",
+                            deterministic_status="ignored_by_filter",
+                            deterministic_reason="ignored_by_filter",
+                            duplicate_job_id=duplicate_id,
+                        ),
+                        triage_output=JOB_SEARCH.LlmAtsTriageOutput(
+                            recommendation="screening",
+                            confidence=0.88,
+                            uncertainty=None,
+                            rationale="Duplicate of tracked ledger PM role.",
+                        ),
+                        raw_output='{"recommendation":"screening","confidence":0.88}',
+                        prompt_version="ats-triage-prompt-v1",
+                        schema_version="ats-triage-schema-v1",
+                        model="gpt-5.2",
+                        model_version="2026-05-01",
+                        malformed_reason=None,
+                        now=NOW,
+                    )
+
+                row = connection.execute(
+                    "SELECT reconciliation, duplicate_job_id, proposal_target FROM llm_ats_triage_audits WHERE id = ?",
+                    (audit_id,),
+                ).fetchone()
+                job_count = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+
+            self.assertEqual(
+                row,
+                ("duplicate_already_tracked", duplicate_id, "filter_rule"),
+            )
+            self.assertEqual(job_count, 1)
+
     def test_import_pipeline_preserves_legacy_roles_and_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "job_search.sqlite"

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sqlite3
@@ -283,6 +284,35 @@ class PollRunResult:
 
 
 @dataclass(frozen=True)
+class LlmAtsTriageInput:
+    company_name: str
+    company_tier: int | None
+    title: str
+    canonical_url: str | None
+    source: str
+    source_job_id: str | None
+    deterministic_status: str
+    deterministic_reason: str | None
+    location: str | None = None
+    remote_status: str | None = None
+    compensation_signal: str | None = None
+    job_id: int | None = None
+    query_run_result_id: int | None = None
+    poll_source_id: int | None = None
+    poll_batch_key: str | None = None
+    duplicate_job_id: int | None = None
+
+
+@dataclass(frozen=True)
+class LlmAtsTriageOutput:
+    recommendation: str | None
+    confidence: float | None
+    uncertainty: str | None
+    rationale: str | None
+    suggested_rule_improvements: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class QueryPack:
     name: str
     label: str
@@ -539,6 +569,55 @@ CREATE TABLE IF NOT EXISTS automation_runs (
 
 CREATE INDEX IF NOT EXISTS idx_automation_runs_review
     ON automation_runs(status, recovery_status, started_at DESC, id DESC);
+
+CREATE TABLE IF NOT EXISTS llm_ats_triage_audits (
+    id INTEGER PRIMARY KEY,
+    job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+    query_run_result_id INTEGER REFERENCES query_run_results(id) ON DELETE SET NULL,
+    poll_source_id INTEGER REFERENCES company_sources(id) ON DELETE SET NULL,
+    company_name TEXT NOT NULL,
+    company_tier INTEGER CHECK (company_tier BETWEEN 1 AND 3),
+    title TEXT NOT NULL,
+    canonical_url TEXT,
+    source TEXT NOT NULL,
+    source_job_id TEXT,
+    deterministic_status TEXT NOT NULL,
+    deterministic_reason TEXT,
+    eligibility_reason TEXT NOT NULL,
+    input_payload TEXT NOT NULL,
+    input_hash TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    model TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    output_status TEXT NOT NULL
+        CHECK (output_status IN ('valid', 'malformed', 'uncertain')),
+    llm_recommendation TEXT
+        CHECK (llm_recommendation IN ('screening', 'pass', 'uncertain')),
+    confidence REAL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+    uncertainty TEXT,
+    structured_output TEXT NOT NULL,
+    raw_output TEXT NOT NULL,
+    malformed_reason TEXT,
+    reconciliation TEXT NOT NULL
+        CHECK (
+            reconciliation IN (
+                'llm_rescues_ignored',
+                'llm_passes_screening',
+                'llm_agrees',
+                'llm_uncertain',
+                'llm_malformed',
+                'duplicate_already_tracked'
+            )
+        ),
+    duplicate_job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+    proposal_target TEXT,
+    proposal_reason TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_ats_triage_audits_created
+    ON llm_ats_triage_audits(created_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY,
@@ -1171,6 +1250,57 @@ BEGIN
 END;
 """
 
+LLM_ATS_TRIAGE_AUDIT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS llm_ats_triage_audits (
+    id INTEGER PRIMARY KEY,
+    job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+    query_run_result_id INTEGER REFERENCES query_run_results(id) ON DELETE SET NULL,
+    poll_source_id INTEGER REFERENCES company_sources(id) ON DELETE SET NULL,
+    company_name TEXT NOT NULL,
+    company_tier INTEGER CHECK (company_tier BETWEEN 1 AND 3),
+    title TEXT NOT NULL,
+    canonical_url TEXT,
+    source TEXT NOT NULL,
+    source_job_id TEXT,
+    deterministic_status TEXT NOT NULL,
+    deterministic_reason TEXT,
+    eligibility_reason TEXT NOT NULL,
+    input_payload TEXT NOT NULL,
+    input_hash TEXT NOT NULL,
+    prompt_version TEXT NOT NULL,
+    schema_version TEXT NOT NULL,
+    model TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    output_status TEXT NOT NULL
+        CHECK (output_status IN ('valid', 'malformed', 'uncertain')),
+    llm_recommendation TEXT
+        CHECK (llm_recommendation IN ('screening', 'pass', 'uncertain')),
+    confidence REAL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+    uncertainty TEXT,
+    structured_output TEXT NOT NULL,
+    raw_output TEXT NOT NULL,
+    malformed_reason TEXT,
+    reconciliation TEXT NOT NULL
+        CHECK (
+            reconciliation IN (
+                'llm_rescues_ignored',
+                'llm_passes_screening',
+                'llm_agrees',
+                'llm_uncertain',
+                'llm_malformed',
+                'duplicate_already_tracked'
+            )
+        ),
+    duplicate_job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+    proposal_target TEXT,
+    proposal_reason TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_llm_ats_triage_audits_created
+    ON llm_ats_triage_audits(created_at DESC, id DESC);
+"""
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -1795,6 +1925,200 @@ def classify_polled_job(
     )
 
 
+def llm_ats_triage_input_payload(triage_input: LlmAtsTriageInput) -> dict[str, object]:
+    return {
+        "company_name": triage_input.company_name,
+        "company_tier": triage_input.company_tier,
+        "title": triage_input.title,
+        "canonical_url": normalize_url(triage_input.canonical_url),
+        "source": triage_input.source,
+        "source_job_id": triage_input.source_job_id,
+        "location": triage_input.location,
+        "remote_status": triage_input.remote_status,
+        "compensation_signal": triage_input.compensation_signal,
+        "deterministic_status": triage_input.deterministic_status,
+        "deterministic_reason": triage_input.deterministic_reason,
+        "job_id": triage_input.job_id,
+        "query_run_result_id": triage_input.query_run_result_id,
+        "poll_source_id": triage_input.poll_source_id,
+        "poll_batch_key": triage_input.poll_batch_key,
+        "duplicate_job_id": triage_input.duplicate_job_id,
+    }
+
+
+def llm_ats_triage_input_hash(triage_input: LlmAtsTriageInput) -> str:
+    payload = llm_ats_triage_input_payload(triage_input)
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def llm_ats_triage_eligibility_reason(triage_input: LlmAtsTriageInput) -> str:
+    product_adjacent = bool(
+        re.search(
+            r"\b(product|platform|ledger|payments?|workflow)\b",
+            triage_input.title,
+            re.I,
+        )
+    )
+    reasons: list[str] = []
+    if triage_input.company_tier == 1:
+        reasons.append("tier_1_company")
+    if product_adjacent:
+        reasons.append("product_adjacent_title")
+    if triage_input.deterministic_status in ("ignored_by_filter", "screening"):
+        reasons.append(f"deterministic_{triage_input.deterministic_status}")
+    if triage_input.poll_batch_key or triage_input.poll_source_id is not None:
+        reasons.append("newly_polled_batch")
+    if triage_input.duplicate_job_id is not None:
+        reasons.append("duplicate_already_tracked")
+    return ",".join(reasons) if reasons else "not_eligible"
+
+
+def reconcile_llm_ats_triage(
+    *,
+    triage_input: LlmAtsTriageInput,
+    output_status: str,
+    llm_recommendation: str | None,
+) -> tuple[str, str | None, str | None]:
+    if triage_input.duplicate_job_id is not None:
+        return (
+            "duplicate_already_tracked",
+            "filter_rule",
+            "Duplicate recommendations are evidence for dedupe/filter tuning only.",
+        )
+    if output_status == "malformed":
+        return ("llm_malformed", None, None)
+    if output_status == "uncertain" or llm_recommendation == "uncertain":
+        return ("llm_uncertain", None, None)
+    if (
+        triage_input.deterministic_status == "ignored_by_filter"
+        and llm_recommendation == "screening"
+    ):
+        return (
+            "llm_rescues_ignored",
+            "target_role",
+            "Review target roles or query packs; deterministic filters require human approval.",
+        )
+    if (
+        triage_input.deterministic_status == "screening"
+        and llm_recommendation == "pass"
+    ):
+        return (
+            "llm_passes_screening",
+            "filter_rule",
+            "Review filter-rule precision; deterministic filters require human approval.",
+        )
+    return ("llm_agrees", None, None)
+
+
+def record_llm_ats_triage_audit(
+    connection: sqlite3.Connection,
+    *,
+    triage_input: LlmAtsTriageInput,
+    triage_output: LlmAtsTriageOutput | None,
+    raw_output: str,
+    prompt_version: str,
+    schema_version: str,
+    model: str,
+    model_version: str,
+    malformed_reason: str | None,
+    now: str,
+) -> int:
+    valid_recommendations = {"screening", "pass", "uncertain"}
+    output_malformed_reason = malformed_reason
+    llm_recommendation = triage_output.recommendation if triage_output else None
+    confidence = triage_output.confidence if triage_output else None
+    if triage_output is not None and llm_recommendation not in valid_recommendations:
+        output_malformed_reason = (
+            f"invalid_recommendation:{llm_recommendation}"
+            if llm_recommendation
+            else "missing_recommendation"
+        )
+        llm_recommendation = None
+    if triage_output is not None and confidence is not None and not 0 <= confidence <= 1:
+        output_malformed_reason = (
+            f"{output_malformed_reason};invalid_confidence:{confidence}"
+            if output_malformed_reason
+            else f"invalid_confidence:{confidence}"
+        )
+        confidence = None
+    output_status = (
+        "malformed"
+        if triage_output is None or output_malformed_reason is not None
+        else "uncertain"
+        if triage_output.recommendation == "uncertain" or triage_output.uncertainty
+        else "valid"
+    )
+    structured_output = (
+        {}
+        if triage_output is None
+        else {
+            "recommendation": triage_output.recommendation,
+            "confidence": triage_output.confidence,
+            "uncertainty": triage_output.uncertainty,
+            "rationale": triage_output.rationale,
+            "suggested_rule_improvements": list(
+                triage_output.suggested_rule_improvements
+            ),
+        }
+    )
+    reconciliation, proposal_target, proposal_reason = reconcile_llm_ats_triage(
+        triage_input=triage_input,
+        output_status=output_status,
+        llm_recommendation=llm_recommendation,
+    )
+    cursor = connection.execute(
+        """
+        INSERT INTO llm_ats_triage_audits(
+            job_id, query_run_result_id, poll_source_id, company_name,
+            company_tier, title, canonical_url, source, source_job_id,
+            deterministic_status, deterministic_reason, eligibility_reason,
+            input_payload, input_hash, prompt_version, schema_version, model,
+            model_version, output_status, llm_recommendation, confidence, uncertainty,
+            structured_output, raw_output, malformed_reason, reconciliation,
+            duplicate_job_id, proposal_target, proposal_reason, created_at
+        )
+        VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?
+        )
+        """,
+        (
+            triage_input.job_id,
+            triage_input.query_run_result_id,
+            triage_input.poll_source_id,
+            triage_input.company_name,
+            triage_input.company_tier,
+            triage_input.title,
+            normalize_url(triage_input.canonical_url),
+            triage_input.source,
+            triage_input.source_job_id,
+            triage_input.deterministic_status,
+            triage_input.deterministic_reason,
+            llm_ats_triage_eligibility_reason(triage_input),
+            json.dumps(llm_ats_triage_input_payload(triage_input), sort_keys=True),
+            llm_ats_triage_input_hash(triage_input),
+            prompt_version,
+            schema_version,
+            model,
+            model_version,
+            output_status,
+            llm_recommendation,
+            confidence,
+            triage_output.uncertainty if triage_output else None,
+            json.dumps(structured_output, sort_keys=True),
+            raw_output,
+            output_malformed_reason,
+            reconciliation,
+            triage_input.duplicate_job_id,
+            proposal_target,
+            proposal_reason,
+            now,
+        ),
+    )
+    return int(cursor.lastrowid)
+
+
 def source_endpoint_url(source: sqlite3.Row) -> str:
     if source["source_url"]:
         return source["source_url"]
@@ -2110,6 +2434,7 @@ def migrate_database(connection: sqlite3.Connection) -> None:
             (6, "draft_review_storage_and_job_screen_bucket", now),
         )
         migrate_screen_bucket(connection)
+        connection.executescript(LLM_ATS_TRIAGE_AUDIT_SCHEMA)
 
 
 def init_database(db_path: Path) -> int:
