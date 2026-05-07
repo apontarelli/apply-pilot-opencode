@@ -4434,6 +4434,310 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertNotEqual(invalid.returncode, 0)
             self.assertIn("invalid choice: 'network'", invalid.stderr)
 
+    def test_action_remind_surfaces_stale_due_blocked_ready_and_records_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            as_of = "2026-05-02T12:00:00+00:00"
+            due_now = "2026-05-02T10:00:00+00:00"
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "ReminderCo")
+                    job_id = self.insert_job(connection, company_id)
+                    contact_id = self.insert_contact(connection, company_id)
+                    artifact_id = self.insert_artifact(
+                        connection,
+                        company_id,
+                        job_id,
+                        status="ready",
+                        path="APPLICATIONS/ReminderCo/artifact.md",
+                    )
+                    gap_id = self.insert_gap(connection, company_id, job_id)
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        job_id=job_id,
+                        queue="screen",
+                        kind="screen_role",
+                        due_at="2000-01-01T00:00:00+00:00",
+                    )
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        contact_id=contact_id,
+                        queue="follow_up",
+                        kind="follow_up",
+                        status="blocked",
+                    )
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        artifact_id=artifact_id,
+                        queue="artifact",
+                        kind="draft_artifact",
+                        due_at=due_now,
+                    )
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        gap_id=gap_id,
+                        queue="classify",
+                        kind="classify_gap",
+                    )
+
+            reminder = self.run_cli(
+                db_path,
+                "action",
+                "remind",
+                "--include-ready",
+                "--record-run",
+                "--limit",
+                "10",
+                "--as-of",
+                as_of,
+            )
+
+            self.assertIn("Action reminders", reminder.stdout)
+            self.assertIn("surfaced=4", reminder.stdout)
+            self.assertIn("mode=read_only | mutation=none", reminder.stdout)
+            self.assertIn(
+                "action=#1 | queue=screen | kind=screen_role | review_state=stale",
+                reminder.stdout,
+            )
+            self.assertIn(
+                "action=#2 | queue=follow_up | kind=follow_up | review_state=blocked",
+                reminder.stdout,
+            )
+            self.assertIn(
+                "action=#3 | queue=artifact | kind=draft_artifact | review_state=due",
+                reminder.stdout,
+            )
+            self.assertIn(
+                "action=#4 | queue=classify | kind=classify_gap | review_state=ready",
+                reminder.stdout,
+            )
+            self.assertIn("job=#1 Product Lead", reminder.stdout)
+            self.assertIn("contact=#1 Hiring Manager", reminder.stdout)
+            self.assertIn(
+                "artifact=#1 memo status=ready path=APPLICATIONS/ReminderCo/artifact.md",
+                reminder.stdout,
+            )
+            self.assertIn("gap=#1 medium status=open Needs proof", reminder.stdout)
+            self.assertIn("next_command=", reminder.stdout)
+            self.assertIn("action next --queue screen --limit 5", reminder.stdout)
+
+            with closing(self.connect(db_path)) as connection:
+                statuses = connection.execute(
+                    "SELECT status, due_at FROM actions ORDER BY id"
+                ).fetchall()
+                runs = connection.execute(
+                    """
+                    SELECT source, scope, status, result_count, action_ids,
+                        created_action_count, notes
+                    FROM automation_runs
+                    ORDER BY id
+                    """
+                ).fetchall()
+
+            self.assertEqual(
+                [(row[0], row[1]) for row in statuses],
+                [
+                    ("queued", "2000-01-01T00:00:00+00:00"),
+                    ("blocked", None),
+                    ("queued", due_now),
+                    ("queued", None),
+                ],
+            )
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0][0], "stale_action_reminder")
+            self.assertEqual(runs[0][1], "all_actions")
+            self.assertEqual(runs[0][2], "completed")
+            self.assertEqual(runs[0][3], 4)
+            self.assertEqual(runs[0][4], "1,3,2,4")
+            self.assertEqual(runs[0][5], 0)
+            self.assertIn("read-only stale-action reminder", runs[0][6])
+
+    def test_action_remind_does_not_migrate_old_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    connection.execute("DROP TABLE automation_runs")
+                    connection.execute("DELETE FROM schema_migrations WHERE version = 5")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "action",
+                    "remind",
+                    "--record-run",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("run init before reporting", result.stderr)
+            with closing(self.connect(db_path)) as connection:
+                automation_runs_exists = connection.execute(
+                    """
+                    SELECT 1
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'automation_runs'
+                    """
+                ).fetchone()
+            self.assertIsNone(automation_runs_exists)
+
+    def test_action_remind_all_clear_is_explicit_and_not_recorded_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "ClearCo")
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        queue="research",
+                        kind="vet_company",
+                        due_at="2999-01-01T00:00:00+00:00",
+                    )
+
+            first = self.run_cli(db_path, "action", "remind", "--record-run")
+            second = self.run_cli(db_path, "action", "remind", "--record-run")
+
+            self.assertIn("surfaced=0", first.stdout)
+            self.assertIn(
+                "All clear: no stale, due, blocked, or ready actions matched reminder scope.",
+                first.stdout,
+            )
+            self.assertIn("next_command=python3 scripts/job_search.py action next", first.stdout)
+            self.assertIn("surfaced=0", second.stdout)
+            with closing(self.connect(db_path)) as connection:
+                run_count = connection.execute(
+                    "SELECT COUNT(*) FROM automation_runs"
+                ).fetchone()[0]
+            self.assertEqual(run_count, 0)
+
+    def test_action_remind_default_excludes_future_ready_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "FutureCo")
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        queue="research",
+                        kind="later_today",
+                        due_at="2026-05-02T18:00:00+00:00",
+                    )
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        queue="apply",
+                        kind="apply",
+                        due_at="2026-05-02T07:00:00+00:00",
+                    )
+
+            default = self.run_cli(
+                db_path,
+                "action",
+                "remind",
+                "--as-of",
+                "2026-05-02T08:00:00+00:00",
+            )
+            with_ready = self.run_cli(
+                db_path,
+                "action",
+                "remind",
+                "--as-of",
+                "2026-05-02T08:00:00+00:00",
+                "--include-ready",
+            )
+
+            self.assertIn("surfaced=1", default.stdout)
+            self.assertIn("kind=apply", default.stdout)
+            self.assertNotIn("kind=later_today", default.stdout)
+            self.assertIn("surfaced=2", with_ready.stdout)
+            self.assertIn("kind=later_today", with_ready.stdout)
+            self.assertIn("review_state=ready", with_ready.stdout)
+            self.assertIn("due_state=due_today", with_ready.stdout)
+
+    def test_action_remind_can_record_all_clear_when_explicitly_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            reminder = self.run_cli(
+                db_path,
+                "action",
+                "remind",
+                "--record-run",
+                "--record-all-clear",
+            )
+
+            self.assertIn("surfaced=0", reminder.stdout)
+            with closing(self.connect(db_path)) as connection:
+                run = connection.execute(
+                    """
+                    SELECT source, status, result_count, action_ids
+                    FROM automation_runs
+                    """
+                ).fetchone()
+            self.assertEqual(run[0], "stale_action_reminder")
+            self.assertEqual(run[1], "completed")
+            self.assertEqual(run[2], 0)
+            self.assertIsNone(run[3])
+
+    def test_action_remind_partial_record_is_visible_in_automation_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "PartialCo")
+                    self.insert_action(
+                        connection,
+                        company_id,
+                        queue="apply",
+                        kind="apply",
+                        due_at="2000-01-01T00:00:00+00:00",
+                    )
+
+            self.run_cli(
+                db_path,
+                "action",
+                "remind",
+                "--record-run",
+                "--record-status",
+                "partial",
+                "--failure-count",
+                "1",
+                "--failure-summary",
+                "fixture partial reminder",
+            )
+            review = self.run_cli(db_path, "automation", "review")
+
+            self.assertIn("source=stale_action_reminder", review.stdout)
+            self.assertIn("status=partial", review.stdout)
+            self.assertIn("results=1", review.stdout)
+            self.assertIn("failures=1", review.stdout)
+            self.assertIn("recovery=unresolved", review.stdout)
+            self.assertIn("fixture partial reminder", review.stdout)
+            self.assertIn("recovery_path=", review.stdout)
+
     def test_job_state_changes_generate_follow_up_and_classify_actions(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "job_search.sqlite"

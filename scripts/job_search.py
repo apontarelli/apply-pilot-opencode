@@ -3538,10 +3538,13 @@ def require_current_database_read_only(db_path: Path) -> None:
     if not db_path.exists():
         raise FileNotFoundError(f"Database not initialized: {db_path}")
     with closing(connect(db_path)) as connection:
-        version = connection.execute(
-            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
-        ).fetchone()[0]
-    if version < SCHEMA_VERSION:
+        versions = {
+            int(row[0])
+            for row in connection.execute("SELECT version FROM schema_migrations")
+        }
+    expected_versions = set(range(1, SCHEMA_VERSION + 1))
+    version = max(versions, default=0)
+    if version < SCHEMA_VERSION or not expected_versions.issubset(versions):
         raise ValueError(
             f"Database schema_version={version} is older than {SCHEMA_VERSION}; "
             "run init before reporting."
@@ -4431,7 +4434,7 @@ def format_action(row: sqlite3.Row) -> str:
     return " | ".join(parts)
 
 
-def action_review_state(row: sqlite3.Row) -> str:
+def action_review_state(row: sqlite3.Row, *, now: datetime | None = None) -> str:
     if row["status"] in TERMINAL_ACTION_STATUSES:
         return str(row["status"])
     if row["status"] == "blocked":
@@ -4443,7 +4446,7 @@ def action_review_state(row: sqlite3.Row) -> str:
     if due_at is None:
         return "ready"
 
-    now = datetime.now(timezone.utc)
+    now = now or datetime.now(timezone.utc)
     if due_at.tzinfo is None:
         due_at = due_at.replace(tzinfo=timezone.utc)
     if due_at < now.replace(hour=0, minute=0, second=0, microsecond=0):
@@ -4498,6 +4501,48 @@ def format_action_next(row: sqlite3.Row) -> str:
     return " | ".join(parts)
 
 
+def format_action_reminder(
+    row: sqlite3.Row, *, script_name: str, as_of: datetime
+) -> str:
+    parts = [
+        f"- action=#{row['id']}",
+        f"queue={row['queue']}",
+        f"kind={row['kind']}",
+        f"review_state={action_review_state(row, now=as_of)}",
+        f"status={row['status']}",
+        f"due_state={due_state(row['due_at'], today=as_of.date())}",
+        f"due={row['due_at'] or 'unscheduled'}",
+        f"company=#{row['company_id']} {row['company_name']}",
+    ]
+    if row["job_id"]:
+        parts.append(f"job=#{row['job_id']} {row['job_title']}")
+    if row["contact_id"]:
+        contact = f"contact=#{row['contact_id']} {row['contact_name']}"
+        if row["contact_title"]:
+            contact += f" ({row['contact_title']})"
+        parts.append(contact)
+    if row["artifact_id"]:
+        artifact = (
+            f"artifact=#{row['artifact_id']} "
+            f"{row['artifact_type']} status={row['artifact_status']}"
+        )
+        if row["artifact_link"]:
+            artifact += f" link={row['artifact_link']}"
+        if row["artifact_path"]:
+            artifact += f" path={row['artifact_path']}"
+        parts.append(artifact)
+    if row["gap_id"]:
+        parts.append(
+            f"gap=#{row['gap_id']} {row['gap_severity']} "
+            f"status={row['gap_status']} {row['gap_description']}"
+        )
+    parts.append(
+        f"next_command={sys.executable} {script_name} action next "
+        f"--queue {row['queue']} --limit 5"
+    )
+    return " | ".join(parts)
+
+
 def action_rows_query(where_sql: str = "") -> str:
     return f"""
         SELECT
@@ -4535,6 +4580,61 @@ def action_rows_query(where_sql: str = "") -> str:
         ORDER BY
             {action_review_order_sql()}
     """
+
+
+def reminder_action_rows(
+    connection: sqlite3.Connection,
+    *,
+    queue: str | None,
+    include_ready: bool,
+    as_of: datetime,
+    limit: int,
+) -> list[sqlite3.Row]:
+    filters = [open_action_where_clause("actions")]
+    params: list[object] = []
+    if queue:
+        filters.append("actions.queue = ?")
+        params.append(queue)
+    where = f"WHERE {' AND '.join(filters)}"
+    rows = sorted(
+        connection.execute(action_rows_query(where), params).fetchall(),
+        key=lambda row: reminder_action_order_key(row, as_of=as_of),
+    )
+    selected: list[sqlite3.Row] = []
+    for row in rows:
+        review_state = action_review_state(row, now=as_of)
+        if review_state in ("stale", "due", "blocked") or (
+            include_ready and review_state == "ready"
+        ):
+            selected.append(row)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def reminder_action_order_key(
+    row: sqlite3.Row, *, as_of: datetime
+) -> tuple[int, int, str, int]:
+    due_at = None
+    try:
+        due_at = parse_optional_utc(row["due_at"])
+    except ValueError:
+        due_at = None
+    if due_at is not None and due_at.tzinfo is None:
+        due_at = due_at.replace(tzinfo=timezone.utc)
+
+    day_start = as_of.replace(hour=0, minute=0, second=0, microsecond=0)
+    if row["status"] == "blocked":
+        state_order = 2
+    elif due_at is not None and due_at < day_start:
+        state_order = 0
+    elif due_at is not None and due_at <= as_of:
+        state_order = 1
+    else:
+        state_order = 3
+    unscheduled_order = 1 if due_at is None else 0
+    due_order = due_at.isoformat() if due_at is not None else ""
+    return (state_order, unscheduled_order, due_order, int(row["id"]))
 
 
 def resolve_company_id(connection: sqlite3.Connection, company: str) -> int:
@@ -8757,6 +8857,80 @@ def command_action_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_action_remind(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_current_database_read_only(db_path)
+    if args.failure_count < 0:
+        raise ValueError("action remind --failure-count must be zero or greater")
+    if args.record_status == "completed" and (
+        args.failure_count or args.failure_summary
+    ):
+        raise ValueError(
+            "completed reminder runs cannot include failure_count or failure_summary"
+        )
+    as_of = parse_report_as_of(args.as_of)
+    started_at = as_of.isoformat()
+    with closing(connect(db_path)) as connection:
+        with connection:
+            rows = reminder_action_rows(
+                connection,
+                queue=args.queue,
+                include_ready=args.include_ready,
+                as_of=as_of,
+                limit=args.limit,
+            )
+            should_record = (
+                rows or args.record_all_clear or args.record_status in ("failed", "partial")
+            )
+            if args.record_run and should_record:
+                ended_at = utc_now()
+                action_ids = encode_id_list([int(row["id"]) for row in rows])
+                notes = (
+                    "read-only stale-action reminder; no actions completed, skipped, "
+                    "rescheduled, reprioritized, or rewritten"
+                )
+                recovery_status = (
+                    "unresolved" if args.record_status in ("failed", "partial") else "none"
+                )
+                connection.execute(
+                    """
+                    INSERT INTO automation_runs(
+                        source, scope, status, started_at, ended_at, result_count,
+                        failure_count, created_action_count, created_artifact_count,
+                        created_query_run_count, failure_summary, action_ids, notes,
+                        recovery_status, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "stale_action_reminder",
+                        args.queue or "all_actions",
+                        args.record_status,
+                        started_at,
+                        ended_at,
+                        len(rows),
+                        args.failure_count,
+                        args.failure_summary,
+                        action_ids,
+                        notes,
+                        recovery_status,
+                        ended_at,
+                        ended_at,
+                    ),
+                )
+
+    scope = f"queue={args.queue}" if args.queue else "all queues"
+    print(f"Action reminders as_of={started_at} | scope={scope} | surfaced={len(rows)}")
+    print("mode=read_only | mutation=none")
+    if not rows:
+        print("All clear: no stale, due, blocked, or ready actions matched reminder scope.")
+        print("next_command=python3 scripts/job_search.py action next")
+        return 0
+    for row in rows:
+        print(format_action_reminder(row, script_name=str(Path(__file__)), as_of=as_of))
+    return 0
+
+
 def command_action_transition(args: argparse.Namespace, status: str) -> int:
     db_path = Path(args.db_path)
     require_database(db_path)
@@ -9275,6 +9449,47 @@ def parse_args() -> argparse.Namespace:
         choices=("queued", "in_progress", "done", "blocked", "skipped", "rescheduled"),
     )
     action_list.add_argument("--limit", type=positive_int, default=50)
+    action_remind = action_subparsers.add_parser(
+        "remind",
+        help="Show read-only stale, due, blocked, and optionally ready action reminders.",
+    )
+    action_remind.add_argument(
+        "--queue",
+        choices=ACTION_QUEUES,
+    )
+    action_remind.add_argument("--limit", type=positive_int, default=20)
+    action_remind.add_argument("--as-of")
+    action_remind.add_argument(
+        "--include-ready",
+        action="store_true",
+        help="Include ready unscheduled/upcoming actions after stale, due, and blocked work.",
+    )
+    action_remind.add_argument(
+        "--record-run",
+        action="store_true",
+        help="Record surfaced reminders in automation_runs.",
+    )
+    action_remind.add_argument(
+        "--record-status",
+        choices=("completed", "failed", "partial"),
+        default="completed",
+        help="Status to store when --record-run records the reminder run.",
+    )
+    action_remind.add_argument(
+        "--failure-count",
+        type=int,
+        default=0,
+        help="Failure count to store with failed or partial recorded reminder runs.",
+    )
+    action_remind.add_argument(
+        "--failure-summary",
+        help="Failure summary to store with failed or partial recorded reminder runs.",
+    )
+    action_remind.add_argument(
+        "--record-all-clear",
+        action="store_true",
+        help="With --record-run, also record all-clear runs.",
+    )
     action_done = action_subparsers.add_parser("done", help="Mark an action done.")
     action_done.add_argument("action_id", type=int)
     action_done.add_argument("--notes")
@@ -9668,6 +9883,8 @@ def main() -> int:
                 return command_action_next(args)
             if args.action_command == "list":
                 return command_action_list(args)
+            if args.action_command == "remind":
+                return command_action_remind(args)
             if args.action_command == "done":
                 return command_action_transition(args, "done")
             if args.action_command == "block":
