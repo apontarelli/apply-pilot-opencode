@@ -182,16 +182,18 @@ Every role should resolve to one bucket:
 - `watch`: company or space matters, but no clean immediate role or action.
 - `pass`: weak interest, weak comp, fake story risk, high screen risk, or no concrete next action.
 
+The command center stores this decision in `jobs.screen_bucket`; `jobs.status`
+remains lifecycle state.
+
 The product should keep these questions separate:
 
 1. Do we like it?
 2. Can Antonio credibly win it now?
 3. If not now, is it worth building toward?
 
-Current implementation note: bucket decisions are durable operating guidance and
-should be recorded in job/action notes today. First-class bucket schema and
-reporting is the accepted follow-up from the Milestone 6 structured-field
-review, tracked in Linear as SID-180.
+Implementation note: bucket decisions are durable operating guidance and should
+be recorded in `jobs.screen_bucket`. Job/action notes should hold only the
+evidence, risks, and next-action context behind that decision.
 
 ## Milestones
 

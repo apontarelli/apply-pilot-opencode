@@ -58,6 +58,9 @@ Resolve each screened role into one bucket:
 - `watch`
 - `pass`
 
+Record that decision in `jobs.screen_bucket`; keep `jobs.status` for lifecycle
+state.
+
 Keep these questions separate:
 
 1. Do we like it?

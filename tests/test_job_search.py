@@ -67,15 +67,17 @@ class JobSearchDatabaseTests(unittest.TestCase):
         status: str = "discovered",
         rejection_reason: str | None = None,
         application_outcome: str | None = None,
+        screen_bucket: str | None = None,
         artifact_opportunity: str | None = None,
     ) -> int:
         connection.execute(
             """
             INSERT INTO jobs(
                 company_id, title, source, lane, status, rejection_reason,
-                application_outcome, artifact_opportunity, created_at, updated_at
+                application_outcome, screen_bucket, artifact_opportunity,
+                created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 company_id,
@@ -85,6 +87,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 status,
                 rejection_reason,
                 application_outcome,
+                screen_bucket,
                 artifact_opportunity,
                 NOW,
                 NOW,
@@ -293,6 +296,76 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 self.assertEqual(migration_count, 6)
             self.assertEqual(db_path.stat().st_mode & 0o777, 0o600)
 
+    def test_screen_bucket_schema_migrates_and_backfills_existing_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "Stripe")
+                    self.insert_job(
+                        connection,
+                        company_id,
+                        title="Ready Role",
+                        status="ready_to_apply",
+                    )
+                    self.insert_job(
+                        connection,
+                        company_id,
+                        title="Proof Gap Role",
+                        rejection_reason="missing_proof",
+                    )
+                    self.insert_job(
+                        connection,
+                        company_id,
+                        title="Ignored Proof Gap Role",
+                        status="ignored_by_filter",
+                        rejection_reason="missing_proof",
+                    )
+                    self.insert_job(
+                        connection,
+                        company_id,
+                        title="Pass Role",
+                        status="ignored_by_filter",
+                    )
+                    connection.execute(
+                        "UPDATE jobs SET screen_bucket = NULL"
+                    )
+                    connection.execute(
+                        "DELETE FROM schema_migrations WHERE version = 6"
+                    )
+
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                rows = connection.execute(
+                    """
+                    SELECT title, status, rejection_reason, screen_bucket
+                    FROM jobs
+                    ORDER BY id
+                    """
+                ).fetchall()
+                self.assertEqual(
+                    [(row[0], row[3]) for row in rows],
+                    [
+                        ("Ready Role", "ready_to_apply"),
+                        ("Proof Gap Role", "portfolio_gap"),
+                        ("Ignored Proof Gap Role", "portfolio_gap"),
+                        ("Pass Role", "pass"),
+                    ],
+                )
+                with self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute(
+                        """
+                        INSERT INTO jobs(
+                            company_id, title, source, screen_bucket,
+                            created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (1, "Bad Role", "manual", "maybe", NOW, NOW),
+                    )
+
     def test_status_shows_daily_operator_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "job_search.sqlite"
@@ -378,6 +451,58 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 "needs_source=1 | stale_checks=2",
                 status.stdout,
             )
+
+    def test_job_add_update_list_and_show_support_screen_bucket(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Stripe")
+
+            self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Stripe",
+                "Product Lead",
+                "--screen-bucket",
+                "low_effort_apply",
+            )
+            show = self.run_cli(db_path, "job", "show", "1")
+            self.assertIn("bucket=low_effort_apply", show.stdout)
+
+            self.run_cli(
+                db_path,
+                "job",
+                "update",
+                "1",
+                "--status",
+                "screening",
+                "--screen-bucket",
+                "stretch_warm_path",
+            )
+            listed = self.run_cli(
+                db_path,
+                "job",
+                "list",
+                "--screen-bucket",
+                "stretch_warm_path",
+            )
+            self.assertIn("status=screening | bucket=stretch_warm_path", listed.stdout)
+
+            with closing(self.connect(db_path)) as connection:
+                row = connection.execute(
+                    "SELECT status, screen_bucket FROM jobs WHERE id = 1"
+                ).fetchone()
+                self.assertEqual(row, ("screening", "stretch_warm_path"))
+
+            self.run_cli(db_path, "job", "add", "Stripe", "Ready Status Role")
+            status = self.run_cli(db_path, "job", "status", "2", "ready_to_apply")
+            self.assertIn("status=ready_to_apply", status.stdout)
+            with closing(self.connect(db_path)) as connection:
+                row = connection.execute(
+                    "SELECT status, screen_bucket FROM jobs WHERE id = 2"
+                ).fetchone()
+                self.assertEqual(row, ("ready_to_apply", "ready_to_apply"))
 
     def test_report_hygiene_surfaces_stale_actions_and_outcome_gaps(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -6313,7 +6438,32 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 "https://jobs.example.com/mercury/pm",
                 "--status",
                 "ready_to_apply",
+                "--screen-bucket",
+                "ready_to_apply",
             )
+            self.run_cli(
+                db_path,
+                "job",
+                "update",
+                "1",
+                "--screen-bucket",
+                "low_effort_apply",
+            )
+            for bucket in (
+                "stretch_warm_path",
+                "portfolio_gap",
+                "watch",
+                "pass",
+            ):
+                self.run_cli(
+                    db_path,
+                    "job",
+                    "add",
+                    "Stripe",
+                    f"{bucket} Role",
+                    "--screen-bucket",
+                    bucket,
+                )
 
             with closing(self.connect(db_path)) as connection:
                 with connection:
@@ -6370,8 +6520,10 @@ class JobSearchDatabaseTests(unittest.TestCase):
             )
 
             self.assertIn(
-                "bucket_resolution=resolved_jobs=2 unresolved_jobs=1 "
-                "resolution_rate=66.7%",
+                "bucket_resolution=resolved_jobs=6 unresolved_jobs=1 "
+                "resolution_rate=85.7% buckets=low_effort_apply:1, "
+                "pass:1, portfolio_gap:1, ready_to_apply:1, "
+                "stretch_warm_path:1, watch:1",
                 metrics.stdout,
             )
             self.assertIn(
