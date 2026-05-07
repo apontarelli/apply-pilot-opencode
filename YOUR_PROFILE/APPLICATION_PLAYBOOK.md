@@ -195,13 +195,21 @@ Durable state lives in the SQLite command center:
 - `APPLICATIONS/_ops/job_search.sqlite`
 - deterministic CLI: `scripts/job_search.py`
 
-Default job statuses:
+Default lifecycle job statuses:
 - `ignored_by_filter`
 - `screening`
 - `ready_to_apply`
 - `applied`
 - `rejected`
 - `closed`
+
+Screening decisions live in `jobs.screen_bucket`:
+- `ready_to_apply`
+- `low_effort_apply`
+- `stretch_warm_path`
+- `portfolio_gap`
+- `watch`
+- `pass`
 
 Rules:
 - check company, job, action, and event history before searching listings
@@ -217,7 +225,7 @@ Rules:
 Low-effort apply rule:
 - if a role is good enough to submit now with an existing base resume, it should be `ready_to_apply`, not `watch`
 - reserve company `watch` status or action notes for roles not worth immediate submission
-- record `low_effort_apply` in job or action notes when the right move is: existing resume, no custom cover letter, and only minimal QA if the form forces text fields
+- record `low_effort_apply` in `jobs.screen_bucket` when the right move is: existing resume, no custom cover letter, and only minimal QA if the form forces text fields
 - default low-effort apply shape: medium-or-better interest, geo good enough, comp not clearly weak, and no fake story required
 - `low_effort_apply` counts toward the daily and weekly application target
 

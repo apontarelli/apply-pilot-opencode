@@ -82,14 +82,13 @@ LEGACY_APPLICATION_OUTCOME_MAP = {
     "rejected_after_loop": "rejected_after_interview",
     "posting_closed": "closed_before_apply",
 }
-ROLE_BUCKET_STATUSES = (
-    "ignored_by_filter",
+SCREEN_BUCKETS = (
     "ready_to_apply",
-    "applied",
-    "interviewing",
-    "rejected",
-    "closed",
-    "archived",
+    "low_effort_apply",
+    "stretch_warm_path",
+    "portfolio_gap",
+    "watch",
+    "pass",
 )
 HIGH_SIGNAL_JOB_STATUSES = ("ready_to_apply", "applied", "interviewing")
 NOISY_QUERY_RESULT_MARKERS = (
@@ -577,6 +576,17 @@ CREATE TABLE IF NOT EXISTS jobs (
     compensation_signal TEXT,
     rejection_reason TEXT,
     application_outcome TEXT,
+    screen_bucket TEXT
+        CHECK (
+            screen_bucket IN (
+                'ready_to_apply',
+                'low_effort_apply',
+                'stretch_warm_path',
+                'portfolio_gap',
+                'watch',
+                'pass'
+            )
+        ),
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -1129,6 +1139,37 @@ BEGIN
 END;
 """
 
+SCREEN_BUCKET_SCHEMA = """
+CREATE TRIGGER IF NOT EXISTS trg_jobs_screen_bucket_insert
+BEFORE INSERT ON jobs
+WHEN NEW.screen_bucket IS NOT NULL
+    AND NEW.screen_bucket NOT IN (
+        'ready_to_apply',
+        'low_effort_apply',
+        'stretch_warm_path',
+        'portfolio_gap',
+        'watch',
+        'pass'
+    )
+BEGIN
+    SELECT RAISE(ABORT, 'invalid jobs.screen_bucket');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_jobs_screen_bucket_update
+BEFORE UPDATE OF screen_bucket ON jobs
+WHEN NEW.screen_bucket IS NOT NULL
+    AND NEW.screen_bucket NOT IN (
+        'ready_to_apply',
+        'low_effort_apply',
+        'stretch_warm_path',
+        'portfolio_gap',
+        'watch',
+        'pass'
+    )
+BEGIN
+    SELECT RAISE(ABORT, 'invalid jobs.screen_bucket');
+END;
+"""
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -1964,6 +2005,43 @@ def migrate_open_action_dedupe(connection: sqlite3.Connection, now: str) -> None
     connection.executescript(OPEN_ACTION_DEDUPE_INDEX)
 
 
+def job_columns(connection: sqlite3.Connection) -> set[str]:
+    return {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
+
+
+def migrate_screen_bucket(connection: sqlite3.Connection) -> None:
+    if "screen_bucket" not in job_columns(connection):
+        connection.execute("ALTER TABLE jobs ADD COLUMN screen_bucket TEXT")
+    connection.executescript(SCREEN_BUCKET_SCHEMA)
+    connection.execute(
+        """
+        UPDATE jobs
+        SET screen_bucket = CASE
+            WHEN status = 'ready_to_apply' THEN 'ready_to_apply'
+            WHEN rejection_reason = 'missing_proof' THEN 'portfolio_gap'
+            WHEN status = 'ignored_by_filter' THEN 'pass'
+            WHEN rejection_reason IN (
+                'fit_mismatch',
+                'level_scope_mismatch',
+                'recruiter_screen_risk',
+                'compensation_mismatch',
+                'location_or_work_model_mismatch',
+                'timing_or_capacity',
+                'stale_or_closed_posting',
+                'duplicate_or_already_tracked',
+                'low_interest'
+            ) THEN 'pass'
+            ELSE screen_bucket
+        END
+        WHERE screen_bucket IS NULL
+            AND (
+                status IN ('ready_to_apply', 'ignored_by_filter')
+                OR rejection_reason IS NOT NULL
+            )
+        """
+    )
+
+
 def migrate_database(connection: sqlite3.Connection) -> None:
     version = connection.execute(
         "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
@@ -2029,14 +2107,16 @@ def migrate_database(connection: sqlite3.Connection) -> None:
             INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
             VALUES (?, ?, ?)
             """,
-            (6, "draft_review_storage", now),
+            (6, "draft_review_storage_and_job_screen_bucket", now),
         )
+        migrate_screen_bucket(connection)
 
 
 def init_database(db_path: Path) -> int:
     with closing(connect(db_path)) as connection:
         with connection:
             connection.executescript(SCHEMA)
+            connection.executescript(SCREEN_BUCKET_SCHEMA)
             connection.execute(
                 """
                 INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
@@ -2270,7 +2350,7 @@ def outcome_hygiene_gaps(
                 event_type,
                 happened_at
             FROM events
-            WHERE job_id IS NOT NULL
+            WHERE events.job_id IS NOT NULL
                 AND event_type IN ('application_submitted', 'interview', 'rejection_received')
         ) AS latest ON latest.job_id = jobs.id
         ORDER BY jobs.id, latest.event_id
@@ -3292,6 +3372,17 @@ def pipeline_status_to_job_status(status: str | None) -> str:
     return "discovered"
 
 
+def legacy_screen_bucket(record: dict[str, object], job_status: str) -> str | None:
+    bucket = record.get("bucket")
+    if isinstance(bucket, str) and bucket in SCREEN_BUCKETS:
+        return bucket
+    if job_status == "ready_to_apply":
+        return "ready_to_apply"
+    if job_status == "ignored_by_filter":
+        return "pass"
+    return None
+
+
 def resume_for_legacy_lane(lane: str | None) -> str | None:
     if lane == "FINTECH":
         return "YOUR_PROFILE/Fintech/FINTECH.md"
@@ -3458,9 +3549,10 @@ def import_legacy_record(
         INSERT INTO jobs(
             company_id, title, canonical_url, source, source_job_id, location,
             lane, status, discovery_status, recommended_resume, materials_status,
-            application_folder, material_paths, application_outcome, created_at, updated_at
+            application_folder, material_paths, application_outcome, screen_bucket,
+            created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             company_id,
@@ -3479,6 +3571,7 @@ def import_legacy_record(
             legacy_application_folder(record),
             material_paths,
             legacy_application_outcome(record, job_status),
+            legacy_screen_bucket(record, job_status),
             created_at,
             updated_at,
         ),
@@ -4384,6 +4477,8 @@ def format_job(row: sqlite3.Row) -> str:
         row["title"],
         f"status={row['status']}",
     ]
+    if row["screen_bucket"]:
+        parts.append(f"bucket={row['screen_bucket']}")
     if row["fit_score"] is not None:
         parts.append(f"fit={row['fit_score']}")
     if row["lane"]:
@@ -5194,9 +5289,9 @@ def store_polled_job(
         INSERT INTO jobs(
             company_id, title, canonical_url, source, source_job_id, location,
             remote_status, lane, status, discovery_status, fit_score,
-            compensation_signal, created_at, updated_at
+            compensation_signal, screen_bucket, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             company["id"],
@@ -5211,6 +5306,7 @@ def store_polled_job(
             discovery_status,
             fit_score,
             discovered.compensation_signal,
+            "pass" if status == "ignored_by_filter" else None,
             now,
             now,
         ),
@@ -6495,9 +6591,10 @@ def command_job_add(args: argparse.Namespace) -> int:
                     relationship_path, artifact_opportunity, recommended_resume,
                     materials_status, application_folder, material_paths,
                     compensation_signal, rejection_reason, application_outcome,
+                    screen_bucket,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     company["id"],
@@ -6521,6 +6618,7 @@ def command_job_add(args: argparse.Namespace) -> int:
                     args.compensation_signal,
                     args.rejection_reason,
                     args.application_outcome,
+                    args.screen_bucket,
                     now,
                     now,
                 ),
@@ -6576,6 +6674,7 @@ def command_job_update(args: argparse.Namespace) -> int:
                     "compensation_signal": args.compensation_signal,
                     "rejection_reason": args.rejection_reason,
                     "application_outcome": args.application_outcome,
+                    "screen_bucket": args.screen_bucket,
                 }.items()
                 if value is not None
             }
@@ -6606,9 +6705,18 @@ def command_job_status(args: argparse.Namespace) -> int:
     with closing(connect(db_path)) as connection:
         with connection:
             job = get_job(connection, args.job_id)
+            screen_bucket = (
+                "ready_to_apply"
+                if args.status == "ready_to_apply" and job["screen_bucket"] is None
+                else job["screen_bucket"]
+            )
             connection.execute(
-                "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
-                (args.status, now, args.job_id),
+                """
+                UPDATE jobs
+                SET status = ?, screen_bucket = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (args.status, screen_bucket, now, args.job_id),
             )
             generate_job_actions(connection, job_id=args.job_id, now=now)
             event_id = log_event(
@@ -6617,7 +6725,13 @@ def command_job_status(args: argparse.Namespace) -> int:
                 job_id=args.job_id,
                 event_type=event_type_for_job_status(args.status),
                 happened_at=args.happened_at,
-                notes=args.notes or f"{job['status']} -> {args.status}",
+                notes=args.notes
+                or (
+                    f"{job['status']} -> {args.status}; "
+                    f"screen_bucket={screen_bucket}"
+                    if screen_bucket != job["screen_bucket"]
+                    else f"{job['status']} -> {args.status}"
+                ),
                 now=now,
             )
     print(f"job id={args.job_id} status={args.status} event_id={event_id}")
@@ -6653,6 +6767,7 @@ def command_job_show(args: argparse.Namespace) -> int:
         + " | ".join(
             [
                 f"status={job['status']}",
+                f"bucket={job['screen_bucket'] or 'unset'}",
                 f"fit={job['fit_score'] if job['fit_score'] is not None else 'unset'}",
                 f"lane={job['lane'] or 'unset'}",
             ]
@@ -6680,6 +6795,9 @@ def command_job_list(args: argparse.Namespace) -> int:
     if args.status:
         filters.append("jobs.status = ?")
         params.append(args.status)
+    if args.screen_bucket:
+        filters.append("jobs.screen_bucket = ?")
+        params.append(args.screen_bucket)
     where = f"WHERE {' AND '.join(filters)}" if filters else ""
     with closing(connect(db_path)) as connection:
         rows = connection.execute(
@@ -8262,9 +8380,14 @@ def command_metrics(args: argparse.Namespace) -> int:
             """
             SELECT COUNT(DISTINCT job_id)
             FROM events
-            WHERE job_id IS NOT NULL
+            JOIN jobs ON jobs.id = events.job_id
+            WHERE events.job_id IS NOT NULL
                 AND event_type = 'status_changed'
-                AND notes LIKE '%ready_to_apply%'
+                AND (
+                    notes LIKE '%screen_bucket=ready_to_apply%'
+                    OR notes LIKE '%screen_bucket=low_effort_apply%'
+                    OR notes LIKE '%ready_to_apply%'
+                )
                 AND happened_at >= ?
                 AND happened_at < ?
             """,
@@ -8341,26 +8464,35 @@ def command_metrics(args: argparse.Namespace) -> int:
             """
         ).fetchall()
         resolved_jobs = connection.execute(
-            f"""
+            """
             SELECT COUNT(*)
             FROM jobs
-            WHERE status IN ({", ".join("?" for _ in ROLE_BUCKET_STATUSES)})
+            WHERE screen_bucket IS NOT NULL
             """,
-            ROLE_BUCKET_STATUSES,
         ).fetchone()[0]
         unresolved_jobs = connection.execute(
-            f"""
+            """
             SELECT COUNT(*)
             FROM jobs
-            WHERE status NOT IN ({", ".join("?" for _ in ROLE_BUCKET_STATUSES)})
+            WHERE screen_bucket IS NULL
+                AND status IN ('discovered', 'screening')
             """,
-            ROLE_BUCKET_STATUSES,
         ).fetchone()[0]
+        screen_bucket_rows = connection.execute(
+            """
+            SELECT screen_bucket, COUNT(*) AS count
+            FROM jobs
+            WHERE screen_bucket IS NOT NULL
+            GROUP BY screen_bucket
+            ORDER BY screen_bucket
+            """
+        ).fetchall()
         high_signal_jobs = connection.execute(
             f"""
             SELECT COUNT(*)
             FROM jobs
             WHERE status IN ({", ".join("?" for _ in HIGH_SIGNAL_JOB_STATUSES)})
+                OR screen_bucket IN ('ready_to_apply', 'low_effort_apply')
             """,
             HIGH_SIGNAL_JOB_STATUSES,
         ).fetchone()[0]
@@ -8394,7 +8526,10 @@ def command_metrics(args: argparse.Namespace) -> int:
                             SELECT 1
                             FROM jobs
                             JOIN companies ON companies.id = jobs.company_id
-                            WHERE jobs.status IN ({", ".join("?" for _ in HIGH_SIGNAL_JOB_STATUSES)})
+                            WHERE (
+                                    jobs.status IN ({", ".join("?" for _ in HIGH_SIGNAL_JOB_STATUSES)})
+                                    OR jobs.screen_bucket IN ('ready_to_apply', 'low_effort_apply')
+                                )
                                 AND (
                                     (
                                         query_run_results.canonical_url IS NOT NULL
@@ -8520,6 +8655,9 @@ def command_metrics(args: argparse.Namespace) -> int:
     status_summary = ", ".join(
         f"{row['status']}:{row['count']}" for row in job_status_rows
     ) or "none"
+    screen_bucket_summary = ", ".join(
+        f"{row['screen_bucket']}:{row['count']}" for row in screen_bucket_rows
+    ) or "none"
     stale_by_queue = ", ".join(
         f"{row['queue']}:{row['count']}" for row in stale_action_rows
     ) or "none"
@@ -8553,7 +8691,7 @@ def command_metrics(args: argparse.Namespace) -> int:
         "bucket_resolution="
         f"resolved_jobs={resolved_jobs} unresolved_jobs={unresolved_jobs} "
         f"resolution_rate={percent(resolved_jobs, resolved_jobs + unresolved_jobs)} "
-        f"statuses={status_summary}"
+        f"buckets={screen_bucket_summary} statuses={status_summary}"
     )
     print(
         "reviewed_query_results="
@@ -9114,6 +9252,7 @@ def add_job_fields(
     parser.add_argument("--compensation-signal")
     parser.add_argument("--rejection-reason", choices=REJECTION_REASONS)
     parser.add_argument("--application-outcome", choices=APPLICATION_OUTCOMES)
+    parser.add_argument("--screen-bucket", choices=SCREEN_BUCKETS)
 
 
 def parse_args() -> argparse.Namespace:
@@ -9345,6 +9484,7 @@ def parse_args() -> argparse.Namespace:
             "archived",
         ),
     )
+    job_list.add_argument("--screen-bucket", choices=SCREEN_BUCKETS)
     job_status = job_subparsers.add_parser("status", help="Update job status.")
     job_status.add_argument("job_id", type=int)
     job_status.add_argument("status", choices=JOB_STATUSES)

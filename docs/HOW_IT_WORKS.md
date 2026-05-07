@@ -264,13 +264,14 @@ an outcome or rejection reason. Use the controlled values below in
 `jobs.application_outcome` and `jobs.rejection_reason`; use notes for the
 specific evidence behind the value.
 
-Role screening buckets are a separate decision model. Keep bucket decisions in
-job/action notes until first-class bucket schema and reporting lands through the
-accepted SID-180 follow-up.
+Role screening buckets are a separate decision model. Store bucket decisions in
+`jobs.screen_bucket`; use notes only for supporting evidence.
 
 Exact fields:
 
 - `jobs.status`: lifecycle state, set with `job status` or `job update`.
+- `jobs.screen_bucket`: controlled screening bucket, set with `job add` or
+  `job update --screen-bucket`.
 - `jobs.application_outcome`: comparable application disposition.
 - `jobs.rejection_reason`: comparable pass or rejection reason.
 - `events.notes`: human-readable evidence, timestamps, or message details.
@@ -319,6 +320,15 @@ Rejection and pass reason values:
   represented by another command-center record.
 - `low_interest`: truthful enough, but not strategically interesting.
 
+Screen bucket values:
+
+- `ready_to_apply`: strong fit, no major truth gap, ready for final human submit.
+- `low_effort_apply`: good enough for base-resume volume without customization.
+- `stretch_warm_path`: strategic, but cold odds are weak; needs a warm path.
+- `portfolio_gap`: attractive pattern blocked by missing reusable proof.
+- `watch`: interesting, but not ready for action now.
+- `pass`: skip for fit, interest, comp, timing, or screen-risk reasons.
+
 Common commands:
 
 ```bash
@@ -341,8 +351,8 @@ mark a role `applied` on inference alone.
 For a screening pass before application:
 
 ```bash
-python3 scripts/job_search.py job update <job_id> --status ignored_by_filter --rejection-reason missing_proof
-python3 scripts/job_search.py action done <action_id> --notes "bucket=portfolio_gap reason=missing_proof; needs controls/reporting case study before re-opening"
+python3 scripts/job_search.py job update <job_id> --status ignored_by_filter --screen-bucket portfolio_gap --rejection-reason missing_proof
+python3 scripts/job_search.py action done <action_id> --notes "reason=missing_proof; needs controls/reporting case study before re-opening"
 ```
 
 Classify queue ownership:
@@ -699,11 +709,9 @@ after a reviewed source pass or adapter handoff.
 
 ## Current Next Work
 
-Tracked follow-up from the Milestone 6 structured-field review:
-
-- Add first-class role screening bucket schema and reporting for `ready_to_apply`,
-  `low_effort_apply`, `stretch_warm_path`, `portfolio_gap`, `watch`, and `pass`
-  decisions; until then, keep bucket decisions in job/action notes.
+Tracked follow-ups from the Milestone 6 structured-field review should build on
+the shipped `jobs.screen_bucket` field instead of reintroducing bucket parsing
+from notes or lifecycle statuses.
 
 ## Validation
 
@@ -731,9 +739,9 @@ checking command-center workflows by hand.
 existing application and outreach rates remain intact, and Milestone 5 adds
 execution-health lines:
 
-- `bucket_resolution`: counts roles resolved out of raw discovery/screening into
-  an explicit terminal or action bucket. Low resolution rate means screen the
-  backlog or record pass/ready decisions.
+- `bucket_resolution`: counts roles with `jobs.screen_bucket` set versus
+  unresolved discovered/screening roles and prints bucket counts. Low resolution
+  rate means screen the backlog or record pass/ready decisions.
 - `reviewed_query_results`: shows broad-source result quality for the window:
   total, reviewed, pending, accepted, rejected, duplicate, and noisy. High
   pending means finish review; high noisy/rejected means tune the query pack or
