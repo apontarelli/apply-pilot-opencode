@@ -44,6 +44,10 @@ Use the registry-backed CLI before broad discovery:
 - `python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --limit 25`
 - `python3 scripts/job_search.py query run --source manual_browser --pack ACCESS --reason "specific access/trust target role"`
 
+Use `docs/HOW_IT_WORKS.md#automation-approval-boundary` as the durable
+approval policy for polling, query-run preparation, classification suggestions,
+raw payload handling, and external-write boundaries.
+
 Default discovery backbone:
 1. Research target companies externally with Codex/ChatGPT or manual browsing.
 2. Import the reviewed company JSON with `company import`.
@@ -185,6 +189,11 @@ Do not use:
 - `send_message`
 - `connect_with_person`
 - inbox or conversation tools
+- browser form submission or final external confirmation clicks
+
+Do not persist full raw LinkedIn/MCP payloads by default. Keep normalized source
+references, counts, decisions, and concise notes; use local/redacted debug
+capture only when explicitly needed for troubleshooting.
 
 If the LinkedIn MCP is unavailable or not authenticated, say so directly and ask for one of:
 - pasted JD text
@@ -221,6 +230,11 @@ When the user wants maximum automation:
 7. validate promising roles with `get_job_details`
 8. continue directly into `$job-apply` for roles that survive the first screen
 9. record every final decision with `scripts/job_search.py`
+
+Maximum automation still means assistive preparation. It may poll configured
+sources, prepare query runs, suggest classifications, dedupe, create queues, and
+draft handoffs. It must stop before applications, outreach, browser form
+submits, deterministic rule changes, or raw third-party payload persistence.
 
 Default job statuses:
 - `ignored_by_filter`: pass

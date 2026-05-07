@@ -93,6 +93,8 @@ Common writes:
 - `python3 scripts/job_search.py action done <action_id> --notes "..."`
 
 Use exact commands from `docs/HOW_IT_WORKS.md` when syntax matters.
+For automation approval gates, use
+`docs/HOW_IT_WORKS.md#automation-approval-boundary` as the durable policy.
 
 ## Queue Semantics
 
@@ -260,7 +262,15 @@ For handoffs, include:
 - LinkedIn, browser tabs, and external boards are discovery surfaces only.
 - Do not submit applications without explicit human direction.
 - Do not message people without explicit human direction.
+- Do not submit browser forms, click final external confirmation buttons, or
+  write to external accounts without explicit human direction.
+- Do not change deterministic rules, query-pack defaults, target filters,
+  strategy docs, or resume/profile positioning based only on automation output.
 - Do not store raw LinkedIn/MCP payloads in durable artifacts unless the user
   explicitly asks for local debugging capture.
+- Treat polling, reminders, classification, dedupe, queue creation, and
+  application or outreach materials as preparation for human review.
+- For automation runs, record source/scope, timing, counts, linked records,
+  failure/recovery state, and concise operator notes.
 - Do not let resume polishing block application volume.
 - Prefer small, clear state updates over broad speculative cleanup.
