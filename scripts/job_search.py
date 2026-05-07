@@ -21,7 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = REPO_ROOT / "APPLICATIONS" / "_ops" / "job_search.sqlite"
 DEFAULT_PIPELINE_PATH = REPO_ROOT / "APPLICATIONS" / "_ops" / "job_pipeline.jsonl"
 QUERY_PACK_REGISTRY_PATH = REPO_ROOT / "config" / "job_search_query_packs.json"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 OPEN_ACTION_STATUSES = ("queued", "in_progress", "blocked", "rescheduled")
 TERMINAL_ACTION_STATUSES = ("done", "skipped")
 ACTION_QUEUES = ("screen", "apply", "follow_up", "research", "artifact", "classify")
@@ -45,6 +45,8 @@ AUTOMATION_RECOVERY_STATUSES = (
     "skipped",
     "manual_resolved",
 )
+DRAFT_TYPES = ("follow_up", "application_answer")
+DRAFT_STATUSES = ("draft", "needs_revision", "rejected", "approved")
 REJECTION_REASONS = (
     "fit_mismatch",
     "level_scope_mismatch",
@@ -134,6 +136,9 @@ EVENT_TYPES = (
     "coffee_chat",
     "referral_ask",
     "artifact_sent",
+    "draft_created",
+    "draft_revised",
+    "draft_rejected",
     "gap_identified",
     "status_changed",
     "note",
@@ -517,10 +522,12 @@ CREATE TABLE IF NOT EXISTS automation_runs (
     failure_count INTEGER NOT NULL DEFAULT 0 CHECK (failure_count >= 0),
     created_action_count INTEGER NOT NULL DEFAULT 0 CHECK (created_action_count >= 0),
     created_artifact_count INTEGER NOT NULL DEFAULT 0 CHECK (created_artifact_count >= 0),
+    created_draft_count INTEGER NOT NULL DEFAULT 0 CHECK (created_draft_count >= 0),
     created_query_run_count INTEGER NOT NULL DEFAULT 0 CHECK (created_query_run_count >= 0),
     failure_summary TEXT,
     action_ids TEXT,
     artifact_ids TEXT,
+    draft_ids TEXT,
     query_run_ids TEXT,
     notes TEXT,
     recovery_status TEXT NOT NULL DEFAULT 'none'
@@ -613,6 +620,28 @@ CREATE TABLE IF NOT EXISTS artifacts (
     CHECK (link IS NOT NULL OR path IS NOT NULL OR status IN ('idea', 'queued', 'drafting'))
 );
 
+CREATE TABLE IF NOT EXISTS drafts (
+    id INTEGER PRIMARY KEY,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+    contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+    artifact_id INTEGER REFERENCES artifacts(id) ON DELETE SET NULL,
+    action_id INTEGER REFERENCES actions(id) ON DELETE SET NULL,
+    draft_type TEXT NOT NULL CHECK (draft_type IN ('follow_up', 'application_answer')),
+    status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft', 'needs_revision', 'rejected', 'approved')),
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    path TEXT,
+    source_summary TEXT,
+    approval_note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_drafts_review
+    ON drafts(status, draft_type, updated_at DESC, id DESC);
+
 CREATE TABLE IF NOT EXISTS gaps (
     id INTEGER PRIMARY KEY,
     company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
@@ -691,6 +720,13 @@ BEFORE UPDATE OF company_id ON artifacts
 WHEN NEW.company_id <> OLD.company_id
 BEGIN
     SELECT RAISE(ABORT, 'artifact company_id is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_drafts_company_immutable
+BEFORE UPDATE OF company_id ON drafts
+WHEN NEW.company_id <> OLD.company_id
+BEGIN
+    SELECT RAISE(ABORT, 'draft company_id is immutable');
 END;
 
 CREATE TRIGGER IF NOT EXISTS trg_gaps_company_immutable
@@ -988,10 +1024,12 @@ CREATE TABLE IF NOT EXISTS automation_runs (
     failure_count INTEGER NOT NULL DEFAULT 0 CHECK (failure_count >= 0),
     created_action_count INTEGER NOT NULL DEFAULT 0 CHECK (created_action_count >= 0),
     created_artifact_count INTEGER NOT NULL DEFAULT 0 CHECK (created_artifact_count >= 0),
+    created_draft_count INTEGER NOT NULL DEFAULT 0 CHECK (created_draft_count >= 0),
     created_query_run_count INTEGER NOT NULL DEFAULT 0 CHECK (created_query_run_count >= 0),
     failure_summary TEXT,
     action_ids TEXT,
     artifact_ids TEXT,
+    draft_ids TEXT,
     query_run_ids TEXT,
     notes TEXT,
     recovery_status TEXT NOT NULL DEFAULT 'none'
@@ -1004,6 +1042,91 @@ CREATE TABLE IF NOT EXISTS automation_runs (
 
 CREATE INDEX IF NOT EXISTS idx_automation_runs_review
     ON automation_runs(status, recovery_status, started_at DESC, id DESC);
+"""
+
+DRAFT_SCHEMA = """
+CREATE TABLE IF NOT EXISTS drafts (
+    id INTEGER PRIMARY KEY,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
+    contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+    artifact_id INTEGER REFERENCES artifacts(id) ON DELETE SET NULL,
+    action_id INTEGER REFERENCES actions(id) ON DELETE SET NULL,
+    draft_type TEXT NOT NULL CHECK (draft_type IN ('follow_up', 'application_answer')),
+    status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft', 'needs_revision', 'rejected', 'approved')),
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    path TEXT,
+    source_summary TEXT,
+    approval_note TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_drafts_review
+    ON drafts(status, draft_type, updated_at DESC, id DESC);
+
+CREATE TRIGGER IF NOT EXISTS trg_drafts_company_immutable
+BEFORE UPDATE OF company_id ON drafts
+WHEN NEW.company_id <> OLD.company_id
+BEGIN
+    SELECT RAISE(ABORT, 'draft company_id is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_drafts_same_company_insert
+BEFORE INSERT ON drafts
+WHEN
+    (NEW.job_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM jobs
+        WHERE jobs.id = NEW.job_id
+            AND jobs.company_id <> NEW.company_id
+    ))
+    OR (NEW.contact_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM contacts
+        WHERE contacts.id = NEW.contact_id
+            AND contacts.company_id <> NEW.company_id
+    ))
+    OR (NEW.artifact_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM artifacts
+        WHERE artifacts.id = NEW.artifact_id
+            AND artifacts.company_id <> NEW.company_id
+    ))
+    OR (NEW.action_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM actions
+        WHERE actions.id = NEW.action_id
+            AND actions.company_id <> NEW.company_id
+    ))
+BEGIN
+    SELECT RAISE(ABORT, 'draft reference belongs to a different company');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_drafts_same_company_update
+BEFORE UPDATE OF company_id, job_id, contact_id, artifact_id, action_id ON drafts
+WHEN
+    (NEW.job_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM jobs
+        WHERE jobs.id = NEW.job_id
+            AND jobs.company_id <> NEW.company_id
+    ))
+    OR (NEW.contact_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM contacts
+        WHERE contacts.id = NEW.contact_id
+            AND contacts.company_id <> NEW.company_id
+    ))
+    OR (NEW.artifact_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM artifacts
+        WHERE artifacts.id = NEW.artifact_id
+            AND artifacts.company_id <> NEW.company_id
+    ))
+    OR (NEW.action_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM actions
+        WHERE actions.id = NEW.action_id
+            AND actions.company_id <> NEW.company_id
+    ))
+BEGIN
+    SELECT RAISE(ABORT, 'draft reference belongs to a different company');
+END;
 """
 
 
@@ -1887,6 +2010,26 @@ def migrate_database(connection: sqlite3.Connection) -> None:
             VALUES (?, ?, ?)
             """,
             (5, "automation_run_history", now),
+        )
+        version = 5
+    if version < 6:
+        now = utc_now()
+        for column_sql in (
+            "ALTER TABLE automation_runs ADD COLUMN created_draft_count INTEGER NOT NULL DEFAULT 0 CHECK (created_draft_count >= 0)",
+            "ALTER TABLE automation_runs ADD COLUMN draft_ids TEXT",
+        ):
+            try:
+                connection.execute(column_sql)
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
+        connection.executescript(DRAFT_SCHEMA)
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
+            VALUES (?, ?, ?)
+            """,
+            (6, "draft_review_storage", now),
         )
 
 
@@ -4453,6 +4596,141 @@ def render_event(row: sqlite3.Row) -> str:
     return " | ".join(parts)
 
 
+def draft_review_marker(draft_type: str) -> str:
+    if draft_type == "application_answer":
+        return "REVIEW ONLY - UNSUBMITTED. Human approval required before any application form submission."
+    return "REVIEW ONLY - UNSENT. Human approval required before any email, LinkedIn message, or outreach."
+
+
+def draft_markdown(
+    *,
+    draft_type: str,
+    title: str,
+    body: str,
+    company_name: str,
+    job_title: str | None,
+    source_summary: str | None,
+    action_id: int | None,
+    contact_id: int | None,
+    artifact_id: int | None,
+) -> str:
+    source_parts = [f"company={company_name}"]
+    if job_title:
+        source_parts.append(f"job={job_title}")
+    if action_id is not None:
+        source_parts.append(f"action=#{action_id}")
+    if contact_id is not None:
+        source_parts.append(f"contact=#{contact_id}")
+    if artifact_id is not None:
+        source_parts.append(f"artifact=#{artifact_id}")
+    if source_summary:
+        source_parts.append(f"source={source_summary}")
+    return (
+        f"# {title}\n\n"
+        f"**{draft_review_marker(draft_type)}**\n\n"
+        f"Source: {' | '.join(source_parts)}\n\n"
+        "Approval boundary: revise, reject, or approve explicitly in the command center. "
+        "Do not send or submit from this file.\n\n"
+        "## Draft\n\n"
+        f"{body.rstrip()}\n"
+    )
+
+
+def write_draft_file(
+    *,
+    path_text: str,
+    draft_type: str,
+    title: str,
+    body: str,
+    company_name: str,
+    job_title: str | None,
+    source_summary: str | None,
+    action_id: int | None,
+    contact_id: int | None,
+    artifact_id: int | None,
+) -> None:
+    path = resolved_draft_path(path_text)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.tmp")
+    temp_path.write_text(
+        draft_markdown(
+            draft_type=draft_type,
+            title=title,
+            body=body,
+            company_name=company_name,
+            job_title=job_title,
+            source_summary=source_summary,
+            action_id=action_id,
+            contact_id=contact_id,
+            artifact_id=artifact_id,
+        ),
+        encoding="utf-8",
+    )
+    temp_path.replace(path)
+
+
+def is_relative_to(child: Path, parent: Path) -> bool:
+    try:
+        child.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def resolved_draft_path(path_text: str) -> Path:
+    path = Path(path_text)
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return path.resolve()
+
+
+def validate_draft_path(
+    path_text: str,
+    *,
+    db_path: Path,
+    job_application_folder: str | None,
+) -> None:
+    path = resolved_draft_path(path_text)
+    allowed_roots = [
+        (REPO_ROOT / "APPLICATIONS" / "READY_TO_APPLY").resolve(),
+        (db_path.parent / "APPLICATIONS" / "READY_TO_APPLY").resolve(),
+    ]
+    if job_application_folder:
+        folder = Path(job_application_folder)
+        if not folder.is_absolute():
+            folder = REPO_ROOT / folder
+        allowed_roots.append(folder.resolve())
+    if not any(is_relative_to(path, root) for root in allowed_roots):
+        raise ValueError(
+            "draft path must be under APPLICATIONS/READY_TO_APPLY or the linked "
+            "job application_folder"
+        )
+
+
+def render_draft(row: sqlite3.Row) -> str:
+    parts = [
+        f"draft id={row['id']}",
+        f"type={row['draft_type']}",
+        f"status={row['status']}",
+        "review_only=unsent_unsubmitted",
+        f"title={row['title']}",
+        f"company={row['company_name']}",
+    ]
+    for label, column in (
+        ("job", "job_title"),
+        ("contact", "contact_name"),
+        ("artifact", "artifact_type"),
+        ("action", "action_kind"),
+        ("path", "path"),
+        ("source", "source_summary"),
+        ("approval", "approval_note"),
+    ):
+        if row[column]:
+            parts.append(f"{label}={row[column]}")
+    parts.append("approval_required=before_external_side_effect")
+    return " | ".join(parts)
+
+
 def event_type_for_job_status(status: str) -> str:
     if status == "applied":
         return "application_submitted"
@@ -5430,6 +5708,8 @@ def format_stable_links(row: sqlite3.Row) -> str:
         links.append(f"actions=#{row['action_ids'].replace(',', ',#')}")
     if row["artifact_ids"]:
         links.append(f"artifacts=#{row['artifact_ids'].replace(',', ',#')}")
+    if "draft_ids" in row.keys() and row["draft_ids"]:
+        links.append(f"drafts=#{row['draft_ids'].replace(',', ',#')}")
     if row["query_run_ids"]:
         links.append(f"query_runs=#{row['query_run_ids'].replace(',', ',#')}")
     return " ".join(links) if links else "links=none"
@@ -5452,6 +5732,7 @@ def print_automation_run(row: sqlite3.Row) -> None:
         f"| ended={row['ended_at'] or 'unset'} | results={row['result_count']} "
         f"| failures={row['failure_count']} | created="
         f"actions:{row['created_action_count']},artifacts:{row['created_artifact_count']},"
+        f"drafts:{row['created_draft_count']},"
         f"query_runs:{row['created_query_run_count']} | recovery={row['recovery_status']} "
         f"| {format_stable_links(row)}"
         + render_optional("failure", row["failure_summary"])
@@ -5472,7 +5753,9 @@ def insert_automation_run(
     failure_summary: str | None = None,
     action_ids: list[int] | None = None,
     artifact_ids: list[int] | None = None,
+    draft_ids: list[int] | None = None,
     query_run_ids: list[int] | None = None,
+    created_query_run_count: int | None = None,
     notes: str | None = None,
     recovery_status: str | None = None,
     recovery_notes: str | None = None,
@@ -5490,7 +5773,11 @@ def insert_automation_run(
     )
     action_ids = action_ids or []
     artifact_ids = artifact_ids or []
+    draft_ids = draft_ids or []
     query_run_ids = query_run_ids or []
+    created_query_run_count = (
+        len(query_run_ids) if created_query_run_count is None else created_query_run_count
+    )
     validate_existing_ids(
         connection,
         table="actions",
@@ -5505,6 +5792,12 @@ def insert_automation_run(
     )
     validate_existing_ids(
         connection,
+        table="drafts",
+        label="draft",
+        values=draft_ids,
+    )
+    validate_existing_ids(
+        connection,
         table="query_runs",
         label="query run",
         values=query_run_ids,
@@ -5514,11 +5807,11 @@ def insert_automation_run(
         INSERT INTO automation_runs(
             source, scope, status, started_at, ended_at, result_count,
             failure_count, created_action_count, created_artifact_count,
-            created_query_run_count, failure_summary, action_ids,
-            artifact_ids, query_run_ids, notes, recovery_status,
+            created_draft_count, created_query_run_count, failure_summary, action_ids,
+            artifact_ids, draft_ids, query_run_ids, notes, recovery_status,
             recovery_notes, raw_source_reference, created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             source,
@@ -5530,10 +5823,12 @@ def insert_automation_run(
             failure_count,
             len(action_ids),
             len(artifact_ids),
-            len(query_run_ids),
+            len(draft_ids),
+            created_query_run_count,
             failure_summary,
             encode_id_list(action_ids),
             encode_id_list(artifact_ids),
+            encode_id_list(draft_ids),
             encode_id_list(query_run_ids),
             notes,
             recovery_status,
@@ -5565,6 +5860,7 @@ def command_automation_record(args: argparse.Namespace) -> int:
                 failure_summary=args.failure_summary,
                 action_ids=args.action_id,
                 artifact_ids=args.artifact_id,
+                draft_ids=args.draft_id,
                 query_run_ids=args.query_run_id,
                 notes=args.notes,
                 recovery_status=recovery_status,
@@ -5911,37 +6207,24 @@ def command_automation_prepare_query_run(args: argparse.Namespace) -> int:
                 failure_summary=failure_summary,
                 recovery_notes=args.recovery_notes,
             )
-            cursor = connection.execute(
-                """
-                INSERT INTO automation_runs(
-                    source, scope, status, started_at, ended_at, result_count,
-                    failure_count, created_action_count, created_artifact_count,
-                    created_query_run_count, failure_summary, action_ids,
-                    artifact_ids, query_run_ids, notes, recovery_status,
-                    recovery_notes, raw_source_reference, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    args.source,
-                    pack.name,
-                    status,
-                    started_at,
-                    ended_at,
-                    outcome.result_count,
-                    failure_count,
-                    1 if outcome.import_state == "created" else 0,
-                    failure_summary,
-                    str(outcome.query_run_id),
-                    "prepared query run only; accepted-job creation remains manual",
-                    recovery_status,
-                    args.recovery_notes,
-                    outcome.raw_source_reference,
-                    now,
-                    now,
-                ),
+            automation_run_id = insert_automation_run(
+                connection,
+                source=args.source,
+                scope=pack.name,
+                status=status,
+                started_at=started_at,
+                ended_at=ended_at,
+                result_count=outcome.result_count,
+                failure_count=failure_count,
+                failure_summary=failure_summary,
+                query_run_ids=[outcome.query_run_id],
+                created_query_run_count=1 if outcome.import_state == "created" else 0,
+                notes="prepared query run only; accepted-job creation remains manual",
+                recovery_status=recovery_status,
+                recovery_notes=args.recovery_notes,
+                raw_source_reference=outcome.raw_source_reference,
+                now=now,
             )
-            automation_run_id = int(cursor.lastrowid)
 
     print_query_import_outcome(outcome)
     print(
@@ -7593,6 +7876,237 @@ def command_report_query_pack_tuning(args: argparse.Namespace) -> int:
     return 0
 
 
+def read_draft_body(args: argparse.Namespace) -> str:
+    if bool(args.body) == bool(args.body_file):
+        raise ValueError("provide exactly one of --body or --body-file")
+    if args.body:
+        return args.body
+    return Path(args.body_file).read_text(encoding="utf-8").strip()
+
+
+def command_draft_add(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    now = utc_now()
+    body = read_draft_body(args)
+    if not body:
+        raise ValueError("draft body cannot be empty")
+    if not any(
+        value is not None
+        for value in (args.job_id, args.contact_id, args.artifact_id, args.action_id)
+    ):
+        raise ValueError(
+            "draft requires at least one source link: --job-id, --contact-id, "
+            "--artifact-id, or --action-id"
+        )
+    with closing(connect(db_path)) as connection:
+        with connection:
+            company_id = resolve_company_id(connection, args.company)
+            company = require_row(
+                connection,
+                "SELECT id, name FROM companies WHERE id = ?",
+                (company_id,),
+                f"Company not found: {args.company}",
+            )
+            job = None
+            if args.job_id is not None:
+                job = require_row(
+                    connection,
+                    """
+                    SELECT id, title, application_folder
+                    FROM jobs
+                    WHERE id = ? AND company_id = ?
+                    """,
+                    (args.job_id, company_id),
+                    f"job not found for company: {args.job_id}",
+                )
+            if args.contact_id is not None:
+                require_row(
+                    connection,
+                    "SELECT id FROM contacts WHERE id = ? AND company_id = ?",
+                    (args.contact_id, company_id),
+                    f"contact not found for company: {args.contact_id}",
+                )
+            if args.artifact_id is not None:
+                require_row(
+                    connection,
+                    "SELECT id FROM artifacts WHERE id = ? AND company_id = ?",
+                    (args.artifact_id, company_id),
+                    f"artifact not found for company: {args.artifact_id}",
+                )
+            if args.action_id is not None:
+                require_row(
+                    connection,
+                    "SELECT id FROM actions WHERE id = ? AND company_id = ?",
+                    (args.action_id, company_id),
+                    f"action not found for company: {args.action_id}",
+                )
+            if args.path:
+                validate_draft_path(
+                    args.path,
+                    db_path=db_path,
+                    job_application_folder=str(job["application_folder"])
+                    if job and job["application_folder"]
+                    else None,
+                )
+            cursor = connection.execute(
+                """
+                INSERT INTO drafts(
+                    company_id, job_id, contact_id, artifact_id, action_id,
+                    draft_type, status, title, body, path, source_summary,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    company_id,
+                    args.job_id,
+                    args.contact_id,
+                    args.artifact_id,
+                    args.action_id,
+                    args.type,
+                    args.title,
+                    body,
+                    args.path,
+                    args.source_summary,
+                    now,
+                    now,
+                ),
+            )
+            draft_id = int(cursor.lastrowid)
+            log_event(
+                connection,
+                company_id=company_id,
+                job_id=args.job_id,
+                contact_id=args.contact_id,
+                artifact_id=args.artifact_id,
+                action_id=args.action_id,
+                event_type="draft_created",
+                happened_at=args.happened_at or now,
+                notes=(
+                    f"draft=#{draft_id} type={args.type} status=draft "
+                    f"review_only=unsent_unsubmitted approval_required=true"
+                    + (f" path={args.path}" if args.path else "")
+                ),
+            )
+            if args.path:
+                write_draft_file(
+                    path_text=args.path,
+                    draft_type=args.type,
+                    title=args.title,
+                    body=body,
+                    company_name=str(company["name"]),
+                    job_title=str(job["title"]) if job else None,
+                    source_summary=args.source_summary,
+                    action_id=args.action_id,
+                    contact_id=args.contact_id,
+                    artifact_id=args.artifact_id,
+                )
+    print(
+        f"draft created id={draft_id} type={args.type} status=draft "
+        "review_only=unsent_unsubmitted approval_required=before_external_side_effect"
+        + (f" path={args.path}" if args.path else "")
+    )
+    return 0
+
+
+def draft_rows(
+    connection: sqlite3.Connection,
+    *,
+    company_id: int | None,
+    status: str | None,
+    limit: int,
+) -> list[sqlite3.Row]:
+    predicates: list[str] = []
+    params: list[object] = []
+    if company_id is not None:
+        predicates.append("drafts.company_id = ?")
+        params.append(company_id)
+    if status is not None:
+        predicates.append("drafts.status = ?")
+        params.append(status)
+    where = f"WHERE {' AND '.join(predicates)}" if predicates else ""
+    params.append(limit)
+    return connection.execute(
+        f"""
+        SELECT drafts.*, companies.name AS company_name, jobs.title AS job_title,
+            contacts.name AS contact_name, artifacts.type AS artifact_type,
+            actions.kind AS action_kind
+        FROM drafts
+        JOIN companies ON companies.id = drafts.company_id
+        LEFT JOIN jobs ON jobs.id = drafts.job_id
+        LEFT JOIN contacts ON contacts.id = drafts.contact_id
+        LEFT JOIN artifacts ON artifacts.id = drafts.artifact_id
+        LEFT JOIN actions ON actions.id = drafts.action_id
+        {where}
+        ORDER BY drafts.updated_at DESC, drafts.id DESC
+        LIMIT ?
+        """,
+        tuple(params),
+    ).fetchall()
+
+
+def command_draft_list(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    with closing(connect(db_path)) as connection:
+        company_id = resolve_company_id(connection, args.company) if args.company else None
+        rows = draft_rows(
+            connection,
+            company_id=company_id,
+            status=args.status,
+            limit=args.limit,
+        )
+    if not rows:
+        print("no drafts")
+        return 0
+    for row in rows:
+        print(render_draft(row))
+    return 0
+
+
+def command_draft_status(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    now = utc_now()
+    event_type = "draft_revised" if args.status == "needs_revision" else "draft_rejected"
+    if args.status == "approved":
+        event_type = "status_changed"
+    with closing(connect(db_path)) as connection:
+        with connection:
+            row = require_row(
+                connection,
+                "SELECT * FROM drafts WHERE id = ?",
+                (args.draft_id,),
+                f"Draft not found: {args.draft_id}",
+            )
+            connection.execute(
+                """
+                UPDATE drafts
+                SET status = ?, approval_note = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (args.status, args.notes, now, args.draft_id),
+            )
+            log_event(
+                connection,
+                company_id=int(row["company_id"]),
+                job_id=row["job_id"],
+                contact_id=row["contact_id"],
+                artifact_id=row["artifact_id"],
+                action_id=row["action_id"],
+                event_type=event_type,
+                happened_at=args.happened_at or now,
+                notes=(
+                    f"draft=#{args.draft_id} status={args.status} "
+                    "source_context_preserved=true external_side_effect=false"
+                    + (f" notes={args.notes}" if args.notes else "")
+                ),
+            )
+    print(f"draft id={args.draft_id} status={args.status} external_side_effect=false")
+    return 0
+
+
 def command_metrics(args: argparse.Namespace) -> int:
     db_path = Path(args.db_path)
     require_database(db_path)
@@ -8574,6 +9088,7 @@ def parse_args() -> argparse.Namespace:
     automation_record.add_argument("--failure-summary")
     automation_record.add_argument("--action-id", type=positive_int, action="append")
     automation_record.add_argument("--artifact-id", type=positive_int, action="append")
+    automation_record.add_argument("--draft-id", type=positive_int, action="append")
     automation_record.add_argument("--query-run-id", type=positive_int, action="append")
     automation_record.add_argument("--notes")
     automation_record.add_argument("--recovery-status", choices=AUTOMATION_RECOVERY_STATUSES)
@@ -8798,6 +9313,40 @@ def parse_args() -> argparse.Namespace:
     event_list = event_subparsers.add_parser("list", help="List company history events.")
     event_list.add_argument("--company")
     event_list.add_argument("--limit", type=int, default=50)
+
+    draft = subparsers.add_parser(
+        "draft", help="Save review-only follow-ups and application answers."
+    )
+    draft_subparsers = draft.add_subparsers(
+        dest="draft_command", metavar="command", required=True
+    )
+    draft_add = draft_subparsers.add_parser(
+        "add", help="Create a review-only draft without sending or submitting."
+    )
+    draft_add.add_argument("--company", required=True)
+    draft_add.add_argument("--type", choices=DRAFT_TYPES, required=True)
+    draft_add.add_argument("--title", required=True)
+    body_group = draft_add.add_mutually_exclusive_group(required=True)
+    body_group.add_argument("--body")
+    body_group.add_argument("--body-file")
+    draft_add.add_argument("--path")
+    draft_add.add_argument("--job-id", type=positive_int)
+    draft_add.add_argument("--contact-id", type=positive_int)
+    draft_add.add_argument("--artifact-id", type=positive_int)
+    draft_add.add_argument("--action-id", type=positive_int)
+    draft_add.add_argument("--source-summary")
+    draft_add.add_argument("--happened-at")
+    draft_list = draft_subparsers.add_parser("list", help="List review-only drafts.")
+    draft_list.add_argument("--company")
+    draft_list.add_argument("--status", choices=DRAFT_STATUSES)
+    draft_list.add_argument("--limit", type=positive_int, default=50)
+    draft_status = draft_subparsers.add_parser(
+        "status", help="Reject, approve, or request revision for a draft."
+    )
+    draft_status.add_argument("draft_id", type=positive_int)
+    draft_status.add_argument("status", choices=("needs_revision", "rejected", "approved"))
+    draft_status.add_argument("--notes")
+    draft_status.add_argument("--happened-at")
     metrics = subparsers.add_parser("metrics", help="Show job search metrics.")
     metrics.add_argument("--since")
     metrics.add_argument("--until")
@@ -9094,6 +9643,13 @@ def main() -> int:
                 return command_event_add(args)
             if args.event_command == "list":
                 return command_event_list(args)
+        if args.command == "draft":
+            if args.draft_command == "add":
+                return command_draft_add(args)
+            if args.draft_command == "list":
+                return command_draft_list(args)
+            if args.draft_command == "status":
+                return command_draft_status(args)
         if args.command == "report":
             if args.report_command == "hygiene":
                 return command_report_hygiene(args)

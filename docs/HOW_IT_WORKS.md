@@ -26,6 +26,7 @@ The command center tracks:
 - `jobs`
 - `contacts`
 - `artifacts`
+- `drafts`
 - `gaps`
 - `actions`
 - `events`
@@ -57,6 +58,11 @@ python3 scripts/job_search.py job list --company "Company"
 python3 scripts/job_search.py action next --queue apply --limit 5
 python3 scripts/job_search.py action list --queue apply --limit 25
 python3 scripts/job_search.py action done <action_id>
+python3 scripts/job_search.py draft add --company "Company" --type follow_up --title "Follow-up draft" --action-id <action_id> --body "..."
+python3 scripts/job_search.py draft add --company "Company" --type application_answer --title "Application answers" --job-id <job_id> --action-id <action_id> --path APPLICATIONS/READY_TO_APPLY/Company_Role/QA.md --body-file /tmp/answers.md
+python3 scripts/job_search.py draft list --status draft
+python3 scripts/job_search.py draft status <draft_id> needs_revision --notes "Tighten proof."
+python3 scripts/job_search.py draft status <draft_id> rejected --notes "Do not use."
 python3 scripts/job_search.py event add --company "Company" --type note --notes "..."
 python3 scripts/job_search.py event list --company "Company"
 python3 scripts/job_search.py metrics
@@ -116,6 +122,33 @@ By default, `action next` and `action list` show open work only. Add `--status d
 state. Open queue review output labels each shown action as `stale`, `due`, `blocked`,
 or `ready`, then shows linked company, job, contact, artifact, and gap context when
 present.
+
+Draft follow-ups and application answers are saved through `draft` commands only.
+They are review-only records and, when `--path` is provided, review-only package
+files. Every generated draft must include source links such as company, job,
+action, contact, or artifact IDs. Draft files and list output are marked
+unsent/unsubmitted, and approval is only ledger metadata: it does not send
+email, send LinkedIn messages, click application forms, submit applications, or
+mark a job `applied`.
+
+Draft write contract:
+
+- Follow-up drafts: `draft add --type follow_up` creates a `drafts` row linked
+  to source context and a `draft_created` event. Use `--contact-id`,
+  `--action-id`, `--job-id`, or `--artifact-id` when those records exist.
+- Application answer drafts: `draft add --type application_answer` creates the
+  same review metadata and may write a package file under
+  `APPLICATIONS/READY_TO_APPLY/<Company>_<Role>/QA.md` with a review-only
+  unsubmitted marker.
+- Durable proof/material drafts may also link to `artifacts`; artifact sending
+  still uses the existing artifact/event workflow only after explicit human
+  approval.
+- Revision or rejection uses `draft status <id> needs_revision|rejected` and
+  writes `draft_revised` or `draft_rejected` events without losing the original
+  source links.
+- Automation evidence should record created drafts with
+  `automation record --draft-id <id>` alongside any action, artifact, or query
+  run IDs, so recovery can explain exactly which review artifacts were created.
 
 4. Record the final state in SQLite through `scripts/job_search.py`.
 
