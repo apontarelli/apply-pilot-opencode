@@ -1534,6 +1534,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                                 "url": "https://jobs.example.com/stripe/123",
                                 "source_job_id": "123",
                                 "status": "accepted",
+                                "raw_mcp_payload": {"cookie": "secret-cookie"},
                             },
                             {
                                 "company": "Mercury",
@@ -1564,7 +1565,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 run_count = connection.execute("SELECT COUNT(*) FROM query_runs").fetchone()[0]
                 result_rows = connection.execute(
                     """
-                    SELECT result_status, duplicate_job_id
+                    SELECT result_status, duplicate_job_id, raw_payload
                     FROM query_run_results
                     ORDER BY ordinal
                     """
@@ -1586,9 +1587,13 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertEqual(job_count, 1)
             self.assertEqual(run_count, 1)
             self.assertEqual(
-                result_rows,
+                [row[:2] for row in result_rows],
                 [("duplicate", 1), ("accepted", None), ("rejected", None)],
             )
+            serialized_raw_payloads = json.dumps([row[2] for row in result_rows])
+            self.assertIn("Senior Product Manager", serialized_raw_payloads)
+            self.assertNotIn("raw_mcp_payload", serialized_raw_payloads)
+            self.assertNotIn("secret-cookie", serialized_raw_payloads)
 
     def test_query_import_counts_persisted_rows_after_result_key_collision(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1844,7 +1849,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
             completed_id = self.stdout_id(completed)
             with closing(self.connect(db_path)) as connection:
                 baseline_rows = connection.execute(
-                    "SELECT id, status, recovery_status FROM automation_runs"
+                    "SELECT * FROM automation_runs ORDER BY id"
                 ).fetchall()
 
             hidden_failure = subprocess.run(
@@ -1888,6 +1893,29 @@ class JobSearchDatabaseTests(unittest.TestCase):
                     "2026-04-27T10:00:00+00:00",
                     "--failure-count",
                     "1",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+            completed_with_failure_summary = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "automation",
+                    "record",
+                    "--source",
+                    "manual_browser",
+                    "--scope",
+                    "ACCESS exception",
+                    "--status",
+                    "completed",
+                    "--started-at",
+                    "2026-04-27T10:00:00+00:00",
+                    "--failure-summary",
+                    "rate_limited",
                 ],
                 cwd=REPO_ROOT,
                 text=True,
@@ -1938,8 +1966,13 @@ class JobSearchDatabaseTests(unittest.TestCase):
             )
             self.assertEqual(completed_with_failures.returncode, 1)
             self.assertIn(
-                "automation runs with status completed cannot record failures",
+                "automation runs with failure evidence must use status failed or partial",
                 completed_with_failures.stderr,
+            )
+            self.assertEqual(completed_with_failure_summary.returncode, 1)
+            self.assertIn(
+                "automation runs with failure evidence must use status failed or partial",
+                completed_with_failure_summary.stderr,
             )
             self.assertEqual(fake_link.returncode, 1)
             self.assertIn("action not found: 999", fake_link.stderr)
@@ -1950,7 +1983,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
             )
             with closing(self.connect(db_path)) as connection:
                 current_rows = connection.execute(
-                    "SELECT id, status, recovery_status FROM automation_runs"
+                    "SELECT * FROM automation_runs ORDER BY id"
                 ).fetchall()
             self.assertEqual(current_rows, baseline_rows)
 

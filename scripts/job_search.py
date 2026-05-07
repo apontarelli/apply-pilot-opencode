@@ -1446,27 +1446,33 @@ def query_import_results(payload: dict[str, object]) -> list[dict[str, object]]:
         title = payload_string(result, "title", required=True)
         assert title is not None
         canonical_url = normalize_url(payload_string(result, "canonical_url", "url"))
-        normalized.append(
+        normalized_result = {
+            "ordinal": int(result.get("ordinal") or index),
+            "company_name": payload_string(result, "company_name", "company"),
+            "title": title,
+            "canonical_url": canonical_url,
+            "source_job_id": payload_string(result, "source_job_id", "source_id", "id"),
+            "location": payload_string(result, "location"),
+            "remote_status": payload_string(result, "remote_status", "remote"),
+            "compensation_signal": payload_string(result, "compensation_signal", "compensation"),
+            "result_status": result_status(result),
+            "notes": payload_string(result, "notes"),
+            "raw_source_reference": payload_string(
+                result,
+                "raw_source_reference",
+                "raw_reference",
+                "source_reference",
+            ),
+        }
+        normalized_result["raw_payload"] = json.dumps(
             {
-                "ordinal": int(result.get("ordinal") or index),
-                "company_name": payload_string(result, "company_name", "company"),
-                "title": title,
-                "canonical_url": canonical_url,
-                "source_job_id": payload_string(result, "source_job_id", "source_id", "id"),
-                "location": payload_string(result, "location"),
-                "remote_status": payload_string(result, "remote_status", "remote"),
-                "compensation_signal": payload_string(result, "compensation_signal", "compensation"),
-                "result_status": result_status(result),
-                "notes": payload_string(result, "notes"),
-                "raw_source_reference": payload_string(
-                    result,
-                    "raw_source_reference",
-                    "raw_reference",
-                    "source_reference",
-                ),
-                "raw_payload": json.dumps(result, sort_keys=True),
-            }
+                key: value
+                for key, value in normalized_result.items()
+                if value is not None
+            },
+            sort_keys=True,
         )
+        normalized.append(normalized_result)
     return normalized
 
 
@@ -5221,10 +5227,22 @@ def validate_automation_recovery_status(status: str, recovery_status: str) -> No
         )
 
 
-def validate_automation_failure_count(status: str, failure_count: int) -> None:
-    if status in ("completed", "skipped") and failure_count > 0:
+def validate_automation_failure_evidence(
+    status: str,
+    *,
+    failure_count: int,
+    failure_summary: str | None,
+    recovery_notes: str | None,
+) -> None:
+    if status not in ("failed", "partial") and (
+        failure_count > 0 or failure_summary
+    ):
         raise ValueError(
-            f"automation runs with status {status} cannot record failures"
+            "automation runs with failure evidence must use status failed or partial"
+        )
+    if status not in ("failed", "partial") and recovery_notes:
+        raise ValueError(
+            "only failed or partial automation runs may have recovery notes"
         )
 
 
@@ -5293,7 +5311,12 @@ def command_automation_record(args: argparse.Namespace) -> int:
     now = utc_now()
     recovery_status = args.recovery_status or automation_recovery_default(args.status)
     validate_automation_recovery_status(args.status, recovery_status)
-    validate_automation_failure_count(args.status, args.failure_count)
+    validate_automation_failure_evidence(
+        args.status,
+        failure_count=args.failure_count,
+        failure_summary=args.failure_summary,
+        recovery_notes=args.recovery_notes,
+    )
     action_ids = encode_id_list(args.action_id)
     artifact_ids = encode_id_list(args.artifact_id)
     query_run_ids = encode_id_list(args.query_run_id)
