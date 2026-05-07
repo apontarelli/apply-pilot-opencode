@@ -232,6 +232,53 @@ class PollStoreResult:
 
 
 @dataclass(frozen=True)
+class SourcePollResult:
+    source_id: int
+    company_name: str
+    source_type: str
+    discovered_count: int = 0
+    inserted_count: int = 0
+    ignored_count: int = 0
+    duplicate_count: int = 0
+    screen_action_ids: tuple[int, ...] = ()
+    failure: str | None = None
+
+
+@dataclass(frozen=True)
+class PollRunResult:
+    source_count: int
+    source_results: tuple[SourcePollResult, ...]
+
+    @property
+    def result_count(self) -> int:
+        return sum(result.discovered_count for result in self.source_results)
+
+    @property
+    def inserted_count(self) -> int:
+        return sum(result.inserted_count for result in self.source_results)
+
+    @property
+    def ignored_count(self) -> int:
+        return sum(result.ignored_count for result in self.source_results)
+
+    @property
+    def duplicate_count(self) -> int:
+        return sum(result.duplicate_count for result in self.source_results)
+
+    @property
+    def failure_count(self) -> int:
+        return sum(1 for result in self.source_results if result.failure)
+
+    @property
+    def screen_action_ids(self) -> tuple[int, ...]:
+        return tuple(
+            action_id
+            for result in self.source_results
+            for action_id in result.screen_action_ids
+        )
+
+
+@dataclass(frozen=True)
 class QueryPack:
     name: str
     label: str
@@ -4691,12 +4738,17 @@ def poll_source_rows(
     *,
     company: str | None,
     source_id: int | None,
+    source_ids: list[int] | None = None,
 ) -> list[sqlite3.Row]:
     filters = ["company_sources.status = 'active'"]
     params: list[object] = []
     if company:
         filters.append("companies.name_key = ?")
         params.append(company_name_key(company))
+    if source_ids:
+        placeholders = ", ".join("?" for _ in source_ids)
+        filters.append(f"company_sources.id IN ({placeholders})")
+        params.extend(source_ids)
     if source_id is not None:
         filters.append("company_sources.id = ?")
         params.append(source_id)
@@ -4780,36 +4832,51 @@ def store_polled_job(
     return PollStoreResult(status=status, job_id=job_id)
 
 
-def command_poll(args: argparse.Namespace) -> int:
-    db_path = Path(args.db_path)
-    require_database(db_path)
-    with closing(connect(db_path)) as connection:
-        sources = poll_source_rows(
-            connection,
-            company=args.company,
-            source_id=args.source_id,
-        )
-        if not sources:
-            print("no active sources")
-            return 0
+def find_open_screen_action_id(
+    connection: sqlite3.Connection,
+    *,
+    job_id: int,
+) -> int | None:
+    action = connection.execute(
+        """
+        SELECT id
+        FROM actions
+        WHERE job_id = ?
+            AND queue = 'screen'
+            AND kind = 'screen_role'
+            AND status IN ('queued', 'in_progress', 'blocked', 'rescheduled')
+        LIMIT 1
+        """,
+        (job_id,),
+    ).fetchone()
+    return int(action["id"]) if action is not None else None
 
-        failed = False
-        for source in sources:
-            now = utc_now()
-            try:
-                discovered_jobs = fetch_source_jobs(source)
-            except (HTTPError, URLError, OSError, ValueError) as error:
-                failed = True
-                print(
-                    "poll "
-                    f"source_id={source['id']} company={source['company_name']} "
-                    f"type={source['source_type']} failed error={error}"
+
+def poll_sources(
+    connection: sqlite3.Connection,
+    *,
+    sources: list[sqlite3.Row],
+) -> PollRunResult:
+    source_results: list[SourcePollResult] = []
+    for source in sources:
+        now = utc_now()
+        try:
+            discovered_jobs = fetch_source_jobs(source)
+        except (HTTPError, URLError, OSError, ValueError) as error:
+            source_results.append(
+                SourcePollResult(
+                    source_id=int(source["id"]),
+                    company_name=str(source["company_name"]),
+                    source_type=str(source["source_type"]),
+                    failure=str(error),
                 )
-                continue
-            inserted = 0
-            ignored = 0
-            duplicates = 0
-            screen_actions = 0
+            )
+            continue
+        inserted = 0
+        ignored = 0
+        duplicates = 0
+        screen_action_ids: list[int] = []
+        try:
             with connection:
                 for discovered in discovered_jobs:
                     result = store_polled_job(
@@ -4825,20 +4892,12 @@ def command_poll(args: argparse.Namespace) -> int:
                     if result.status == "ignored_by_filter":
                         ignored += 1
                     if result.status == "screening" and result.job_id is not None:
-                        action = connection.execute(
-                            """
-                            SELECT 1
-                            FROM actions
-                            WHERE job_id = ?
-                                AND queue = 'screen'
-                                AND kind = 'screen_role'
-                                AND status IN ('queued', 'in_progress', 'blocked', 'rescheduled')
-                            LIMIT 1
-                            """,
-                            (result.job_id,),
-                        ).fetchone()
-                        if action is not None:
-                            screen_actions += 1
+                        action_id = find_open_screen_action_id(
+                            connection,
+                            job_id=result.job_id,
+                        )
+                        if action_id is not None:
+                            screen_action_ids.append(action_id)
                 connection.execute(
                     """
                     UPDATE company_sources
@@ -4855,14 +4914,68 @@ def command_poll(args: argparse.Namespace) -> int:
                     """,
                     (now, now, source["company_id"]),
                 )
-            print(
-                "poll "
-                f"source_id={source['id']} company={source['company_name']} "
-                f"type={source['source_type']} discovered={len(discovered_jobs)} "
-                f"inserted={inserted} ignored={ignored} duplicates={duplicates} "
-                f"screen_actions={screen_actions}"
+        except sqlite3.Error as error:
+            if connection.in_transaction:
+                connection.rollback()
+            source_results.append(
+                SourcePollResult(
+                    source_id=int(source["id"]),
+                    company_name=str(source["company_name"]),
+                    source_type=str(source["source_type"]),
+                    failure=str(error),
+                )
             )
-    return 1 if failed else 0
+            continue
+        source_results.append(
+            SourcePollResult(
+                source_id=int(source["id"]),
+                company_name=str(source["company_name"]),
+                source_type=str(source["source_type"]),
+                discovered_count=len(discovered_jobs),
+                inserted_count=inserted,
+                ignored_count=ignored,
+                duplicate_count=duplicates,
+                screen_action_ids=tuple(screen_action_ids),
+            )
+        )
+    return PollRunResult(source_count=len(sources), source_results=tuple(source_results))
+
+
+def print_source_poll_result(result: SourcePollResult) -> None:
+    if result.failure:
+        print(
+            "poll "
+            f"source_id={result.source_id} company={result.company_name} "
+            f"type={result.source_type} failed error={result.failure}"
+        )
+        return
+    print(
+        "poll "
+        f"source_id={result.source_id} company={result.company_name} "
+        f"type={result.source_type} discovered={result.discovered_count} "
+        f"inserted={result.inserted_count} ignored={result.ignored_count} "
+        f"duplicates={result.duplicate_count} "
+        f"screen_actions={len(result.screen_action_ids)}"
+    )
+
+
+def command_poll(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    with closing(connect(db_path)) as connection:
+        sources = poll_source_rows(
+            connection,
+            company=args.company,
+            source_id=args.source_id,
+        )
+        if not sources:
+            print("no active sources")
+            return 0
+
+        run_result = poll_sources(connection, sources=sources)
+        for source_result in run_result.source_results:
+            print_source_poll_result(source_result)
+    return 1 if run_result.failure_count else 0
 
 
 def command_query_import(args: argparse.Namespace) -> int:
@@ -5305,81 +5418,389 @@ def print_automation_run(row: sqlite3.Row) -> None:
     )
 
 
+def insert_automation_run(
+    connection: sqlite3.Connection,
+    *,
+    source: str,
+    scope: str,
+    status: str,
+    started_at: str,
+    ended_at: str | None,
+    result_count: int = 0,
+    failure_count: int = 0,
+    failure_summary: str | None = None,
+    action_ids: list[int] | None = None,
+    artifact_ids: list[int] | None = None,
+    query_run_ids: list[int] | None = None,
+    notes: str | None = None,
+    recovery_status: str | None = None,
+    recovery_notes: str | None = None,
+    raw_source_reference: str | None = None,
+    now: str | None = None,
+) -> int:
+    now = now or utc_now()
+    recovery_status = recovery_status or automation_recovery_default(status)
+    validate_automation_recovery_status(status, recovery_status)
+    validate_automation_failure_evidence(
+        status,
+        failure_count=failure_count,
+        failure_summary=failure_summary,
+        recovery_notes=recovery_notes,
+    )
+    action_ids = action_ids or []
+    artifact_ids = artifact_ids or []
+    query_run_ids = query_run_ids or []
+    validate_existing_ids(
+        connection,
+        table="actions",
+        label="action",
+        values=action_ids,
+    )
+    validate_existing_ids(
+        connection,
+        table="artifacts",
+        label="artifact",
+        values=artifact_ids,
+    )
+    validate_existing_ids(
+        connection,
+        table="query_runs",
+        label="query run",
+        values=query_run_ids,
+    )
+    cursor = connection.execute(
+        """
+        INSERT INTO automation_runs(
+            source, scope, status, started_at, ended_at, result_count,
+            failure_count, created_action_count, created_artifact_count,
+            created_query_run_count, failure_summary, action_ids,
+            artifact_ids, query_run_ids, notes, recovery_status,
+            recovery_notes, raw_source_reference, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            source,
+            scope,
+            status,
+            started_at,
+            ended_at,
+            result_count,
+            failure_count,
+            len(action_ids),
+            len(artifact_ids),
+            len(query_run_ids),
+            failure_summary,
+            encode_id_list(action_ids),
+            encode_id_list(artifact_ids),
+            encode_id_list(query_run_ids),
+            notes,
+            recovery_status,
+            recovery_notes,
+            raw_source_reference,
+            now,
+            now,
+        ),
+    )
+    return int(cursor.lastrowid)
+
+
 def command_automation_record(args: argparse.Namespace) -> int:
     db_path = Path(args.db_path)
     require_database(db_path)
     now = utc_now()
     recovery_status = args.recovery_status or automation_recovery_default(args.status)
-    validate_automation_recovery_status(args.status, recovery_status)
-    validate_automation_failure_evidence(
-        args.status,
-        failure_count=args.failure_count,
-        failure_summary=args.failure_summary,
-        recovery_notes=args.recovery_notes,
-    )
-    action_ids = encode_id_list(args.action_id)
-    artifact_ids = encode_id_list(args.artifact_id)
-    query_run_ids = encode_id_list(args.query_run_id)
     with closing(connect(db_path)) as connection:
         with connection:
-            validate_existing_ids(
+            run_id = insert_automation_run(
                 connection,
-                table="actions",
-                label="action",
-                values=args.action_id,
+                source=args.source,
+                scope=args.scope,
+                status=args.status,
+                started_at=args.started_at,
+                ended_at=args.ended_at,
+                result_count=args.result_count,
+                failure_count=args.failure_count,
+                failure_summary=args.failure_summary,
+                action_ids=args.action_id,
+                artifact_ids=args.artifact_id,
+                query_run_ids=args.query_run_id,
+                notes=args.notes,
+                recovery_status=recovery_status,
+                recovery_notes=args.recovery_notes,
+                raw_source_reference=args.raw_source_reference,
+                now=now,
             )
-            validate_existing_ids(
-                connection,
-                table="artifacts",
-                label="artifact",
-                values=args.artifact_id,
-            )
-            validate_existing_ids(
-                connection,
-                table="query_runs",
-                label="query run",
-                values=args.query_run_id,
-            )
-            cursor = connection.execute(
-                """
-                INSERT INTO automation_runs(
-                    source, scope, status, started_at, ended_at, result_count,
-                    failure_count, created_action_count, created_artifact_count,
-                    created_query_run_count, failure_summary, action_ids,
-                    artifact_ids, query_run_ids, notes, recovery_status,
-                    recovery_notes, raw_source_reference, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    args.source,
-                    args.scope,
-                    args.status,
-                    args.started_at,
-                    args.ended_at,
-                    args.result_count,
-                    args.failure_count,
-                    len(args.action_id or ()),
-                    len(args.artifact_id or ()),
-                    len(args.query_run_id or ()),
-                    args.failure_summary,
-                    action_ids,
-                    artifact_ids,
-                    query_run_ids,
-                    args.notes,
-                    recovery_status,
-                    args.recovery_notes,
-                    args.raw_source_reference,
-                    now,
-                    now,
-                ),
-            )
-            run_id = int(cursor.lastrowid)
     print(
         f"automation run recorded id={run_id} source={args.source} scope={args.scope} "
         f"status={args.status} recovery={recovery_status}"
     )
     return 0
+
+
+def automation_poll_scope(
+    *,
+    company: str | None,
+    source_ids: list[int] | None,
+) -> str:
+    if company and source_ids:
+        return f"company={company} source_ids={','.join(str(id_) for id_ in source_ids)}"
+    if company:
+        return f"company={company}"
+    if source_ids:
+        return f"source_ids={','.join(str(id_) for id_ in source_ids)}"
+    return "active_target_company_sources"
+
+
+def automation_poll_status(run_result: PollRunResult) -> str:
+    if run_result.source_count == 0:
+        return "skipped"
+    if run_result.failure_count == 0:
+        return "completed"
+    if run_result.failure_count == run_result.source_count:
+        return "failed"
+    return "partial"
+
+
+def automation_poll_failure_summary(run_result: PollRunResult) -> str | None:
+    failures = [
+        f"source_id={result.source_id} company={result.company_name} "
+        f"type={result.source_type} error={result.failure}"
+        for result in run_result.source_results
+        if result.failure
+    ]
+    return "; ".join(failures) if failures else None
+
+
+def missing_requested_source_results(
+    *,
+    requested_source_ids: list[int] | None,
+    sources: list[sqlite3.Row],
+    company: str | None,
+) -> tuple[SourcePollResult, ...]:
+    if not requested_source_ids:
+        return ()
+    returned_source_ids = {int(source["id"]) for source in sources}
+    missing_source_ids = [
+        source_id
+        for source_id in dict.fromkeys(requested_source_ids)
+        if source_id not in returned_source_ids
+    ]
+    return tuple(
+        SourcePollResult(
+            source_id=source_id,
+            company_name=company or "unknown",
+            source_type="unknown",
+            failure="requested source is not an active source in scope",
+        )
+        for source_id in missing_source_ids
+    )
+
+
+def missing_requested_company_results(
+    connection: sqlite3.Connection,
+    *,
+    company: str | None,
+) -> tuple[SourcePollResult, ...]:
+    if not company:
+        return ()
+    row = connection.execute(
+        "SELECT id FROM companies WHERE name_key = ?",
+        (company_name_key(company),),
+    ).fetchone()
+    if row is not None:
+        return ()
+    return (
+        SourcePollResult(
+            source_id=0,
+            company_name=company,
+            source_type="unknown",
+            failure="requested company was not found",
+        ),
+    )
+
+
+def no_active_requested_company_source_results(
+    *,
+    company: str | None,
+    sources: list[sqlite3.Row],
+    requested_source_ids: list[int] | None,
+    missing_company_results: tuple[SourcePollResult, ...],
+) -> tuple[SourcePollResult, ...]:
+    if not company or sources or requested_source_ids or missing_company_results:
+        return ()
+    return (
+        SourcePollResult(
+            source_id=0,
+            company_name=company,
+            source_type="unknown",
+            failure="requested company has no active ATS sources in scope",
+        ),
+    )
+
+
+def combine_poll_results(
+    *,
+    run_result: PollRunResult,
+    extra_results: tuple[SourcePollResult, ...],
+) -> PollRunResult:
+    if not extra_results:
+        return run_result
+    source_results = (*run_result.source_results, *extra_results)
+    return PollRunResult(
+        source_count=len(source_results),
+        source_results=source_results,
+    )
+
+
+def automation_poll_notes(run_result: PollRunResult) -> str:
+    return (
+        f"sources={run_result.source_count} inserted={run_result.inserted_count} "
+        f"ignored={run_result.ignored_count} duplicates={run_result.duplicate_count} "
+        f"screen_actions={len(run_result.screen_action_ids)}; "
+        "screen actions require human review before applying or outreach"
+    )
+
+
+def append_automation_run_to_actions(
+    connection: sqlite3.Connection,
+    *,
+    action_ids: tuple[int, ...],
+    automation_run_id: int,
+    now: str,
+) -> None:
+    if not action_ids:
+        return
+    for action_id in action_ids:
+        connection.execute(
+            """
+            UPDATE actions
+            SET notes = CASE
+                    WHEN notes IS NULL OR notes = ''
+                        THEN ?
+                    ELSE notes || char(10) || ?
+                END,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                f"automation_run=#{automation_run_id}",
+                f"automation_run=#{automation_run_id}",
+                now,
+                action_id,
+            ),
+        )
+
+
+def command_automation_poll_targets(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    started_at = utc_now()
+    scope = automation_poll_scope(company=args.company, source_ids=args.source_id)
+    with closing(connect(db_path)) as connection:
+        sources = poll_source_rows(
+            connection,
+            company=args.company,
+            source_id=None,
+            source_ids=args.source_id,
+        )
+        missing_source_results = missing_requested_source_results(
+            requested_source_ids=args.source_id,
+            sources=sources,
+            company=args.company,
+        )
+        missing_company_results = missing_requested_company_results(
+            connection,
+            company=args.company,
+        )
+        no_active_company_source_results = no_active_requested_company_source_results(
+            company=args.company,
+            sources=sources,
+            requested_source_ids=args.source_id,
+            missing_company_results=missing_company_results,
+        )
+        scope_failure_results = (
+            *missing_company_results,
+            *missing_source_results,
+            *no_active_company_source_results,
+        )
+        if not sources:
+            ended_at = utc_now()
+            run_result = combine_poll_results(
+                run_result=PollRunResult(source_count=0, source_results=()),
+                extra_results=scope_failure_results,
+            )
+            status = automation_poll_status(run_result)
+            failure_summary = automation_poll_failure_summary(run_result)
+            notes = (
+                automation_poll_notes(run_result)
+                if scope_failure_results
+                else "No active Greenhouse, Lever, or Ashby sources matched scope."
+            )
+            with connection:
+                run_id = insert_automation_run(
+                    connection,
+                    source="target_company_poll",
+                    scope=scope,
+                    status=status,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    failure_count=run_result.failure_count,
+                    failure_summary=failure_summary,
+                    notes=notes,
+                    raw_source_reference=scope,
+                    now=ended_at,
+                )
+            if scope_failure_results:
+                for source_result in run_result.source_results:
+                    print_source_poll_result(source_result)
+            else:
+                print("no active sources")
+            print(
+                f"automation poll-targets run_id={run_id} status={status} "
+                f"sources={run_result.source_count} results=0 "
+                f"failures={run_result.failure_count} screen_actions=0"
+            )
+            return 1 if status in ("failed", "partial") else 0
+
+        run_result = combine_poll_results(
+            run_result=poll_sources(connection, sources=sources),
+            extra_results=scope_failure_results,
+        )
+        ended_at = utc_now()
+        status = automation_poll_status(run_result)
+        failure_summary = automation_poll_failure_summary(run_result)
+        with connection:
+            run_id = insert_automation_run(
+                connection,
+                source="target_company_poll",
+                scope=scope,
+                status=status,
+                started_at=started_at,
+                ended_at=ended_at,
+                result_count=run_result.result_count,
+                failure_count=run_result.failure_count,
+                failure_summary=failure_summary,
+                action_ids=list(run_result.screen_action_ids),
+                notes=automation_poll_notes(run_result),
+                raw_source_reference=scope,
+                now=ended_at,
+            )
+            append_automation_run_to_actions(
+                connection,
+                action_ids=run_result.screen_action_ids,
+                automation_run_id=run_id,
+                now=ended_at,
+            )
+    for source_result in run_result.source_results:
+        print_source_poll_result(source_result)
+    print(
+        f"automation poll-targets run_id={run_id} status={status} "
+        f"sources={run_result.source_count} results={run_result.result_count} "
+        f"failures={run_result.failure_count} "
+        f"screen_actions={len(run_result.screen_action_ids)}"
+    )
+    return 1 if status in ("failed", "partial") else 0
 
 
 def automation_rows(
@@ -8009,6 +8430,12 @@ def parse_args() -> argparse.Namespace:
     automation_record.add_argument("--recovery-status", choices=AUTOMATION_RECOVERY_STATUSES)
     automation_record.add_argument("--recovery-notes")
     automation_record.add_argument("--raw-source-reference")
+    automation_poll = automation_subparsers.add_parser(
+        "poll-targets",
+        help="Poll active target-company ATS sources and record automation evidence.",
+    )
+    automation_poll.add_argument("--company")
+    automation_poll.add_argument("--source-id", type=positive_int, action="append")
     automation_list = automation_subparsers.add_parser(
         "list", help="List automation run history."
     )
@@ -8454,6 +8881,8 @@ def main() -> int:
         if args.command == "automation":
             if args.automation_command == "record":
                 return command_automation_record(args)
+            if args.automation_command == "poll-targets":
+                return command_automation_poll_targets(args)
             if args.automation_command == "list":
                 return command_automation_list(args)
             if args.automation_command == "review":
