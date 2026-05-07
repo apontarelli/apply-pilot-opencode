@@ -158,6 +158,20 @@ For ready JDs:
 5. Save high-signal packages under `APPLICATIONS/READY_TO_APPLY/`.
 6. Record final state and next action.
 
+### Safe Assistive Automation
+
+For preparation work that can run ahead of manual review:
+
+1. Poll configured Greenhouse, Lever, and Ashby target-company sources.
+2. Surface stale, due, blocked, and ready actions without changing them.
+3. Prepare approved-source query-run packages before any job acceptance.
+4. Save review-only follow-up and application-answer drafts.
+5. Record run history with linked actions, drafts, query runs, failures, and
+   recovery status.
+6. Store LLM-assisted ATS triage as auditable recommendations only; rule,
+   filter, outreach, and application changes still require explicit human
+   approval.
+
 ## Design Principles
 
 - Company-first, not role-spreadsheet-first.
@@ -277,20 +291,21 @@ Deliverables:
 
 ### Milestone 7: Safe Assistive Automation
 
-Status: planned.
+Status: shipped baseline.
 
 Goal: automate preparation without crossing human-submission boundaries.
 
 Deliverables:
 
-- scheduled target-company polling
-- stale-action reminders
-- automated query-run preparation for approved sources
-- saved drafts for follow-ups or application answers
-- classification and triage recommendations that remain advisory
+- schedulable target-company polling for configured ATS sources
+- stale-action reminders that are read-only over existing action state
+- automated query-run preparation for approved sources and guarded query packs
+- saved review-only drafts for follow-ups or application answers
+- classification and LLM ATS triage recommendations that remain advisory
 - run-history evidence and recovery state for successful, failed, and partial
-  automation
-- explicit human approval before any outreach or submission
+  automation, including linked actions, drafts, and query runs
+- explicit human approval before any outreach, application submission, external
+  browser write, deterministic rule change, or raw payload persistence
 
 ## Success Metrics
 

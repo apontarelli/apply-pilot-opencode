@@ -128,6 +128,7 @@ python3 scripts/job_search.py --db-path "$DB" action add \
   --queue research \
   --kind daily_smoke \
   --notes "Temporary daily smoke action"
+python3 scripts/job_search.py --db-path "$DB" action remind --include-ready --record-run
 python3 scripts/job_search.py --db-path "$DB" action next --queue research --limit 5
 python3 scripts/job_search.py --db-path "$DB" event add \
   --company "Smoke Test Sentinel" \
@@ -139,6 +140,30 @@ ACTION_ID="$(
     sed -n 's/^#\([0-9][0-9]*\).*/\1/p' |
     head -n 1
 )"
+DRAFT_ID="$(
+  python3 scripts/job_search.py --db-path "$DB" draft add \
+    --company "Smoke Test Sentinel" \
+    --type follow_up \
+    --title "Temporary follow-up draft" \
+    --action-id "$ACTION_ID" \
+    --body "Temporary review-only smoke draft." |
+    sed -n 's/^draft created id=\([0-9][0-9]*\).*/\1/p' |
+    head -n 1
+)"
+python3 scripts/job_search.py --db-path "$DB" draft list --status draft
+python3 scripts/job_search.py --db-path "$DB" automation record \
+  --source manual_browser \
+  --scope daily_smoke \
+  --status partial \
+  --started-at 2026-01-01T00:00:00+00:00 \
+  --ended-at 2026-01-01T00:01:00+00:00 \
+  --result-count 1 \
+  --failure-count 1 \
+  --failure-summary smoke_partial \
+  --action-id "$ACTION_ID" \
+  --draft-id "$DRAFT_ID" \
+  --notes "Temporary smoke run; no external side effects."
+python3 scripts/job_search.py --db-path "$DB" automation review
 python3 scripts/job_search.py --db-path "$DB" action done "$ACTION_ID"
 python3 scripts/job_search.py --db-path "$DB" metrics
 python3 scripts/job_search.py --db-path "$DB" report cooldowns
@@ -148,8 +173,17 @@ Expected evidence:
 
 - `action next --queue research` shows a `research:daily_smoke` action for
   Smoke Test Sentinel.
+- `action remind --include-ready --record-run` prints reminder rows without
+  completing, skipping, rescheduling, or rewriting actions.
 - `event list --company "Smoke Test Sentinel"` shows the temporary note.
+- `draft list --status draft` shows a review-only draft with
+  `approval_required=before_external_side_effect`.
+- `automation review` shows the partial smoke run with source/scope, linked
+  action, draft, failure summary, recovery state, and safe recovery choices.
 - `action done "$ACTION_ID"` succeeds.
 - `metrics` prints command-center counts without errors.
 - `report cooldowns` prints advisory read-only mode and either no
   recommendations or recommendation rows with evidence.
+- No smoke command sends outreach, submits an application, clicks an external
+  browser form, persists raw third-party payloads, or changes deterministic
+  rules.
