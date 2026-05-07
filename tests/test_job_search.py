@@ -1842,6 +1842,10 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 "2026-04-27T10:00:00+00:00",
             )
             completed_id = self.stdout_id(completed)
+            with closing(self.connect(db_path)) as connection:
+                baseline_rows = connection.execute(
+                    "SELECT id, status, recovery_status FROM automation_runs"
+                ).fetchall()
 
             hidden_failure = subprocess.run(
                 [
@@ -1861,6 +1865,29 @@ class JobSearchDatabaseTests(unittest.TestCase):
                     "2026-04-27T10:00:00+00:00",
                     "--recovery-status",
                     "none",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+            completed_with_failures = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "automation",
+                    "record",
+                    "--source",
+                    "manual_browser",
+                    "--scope",
+                    "ACCESS exception",
+                    "--status",
+                    "completed",
+                    "--started-at",
+                    "2026-04-27T10:00:00+00:00",
+                    "--failure-count",
+                    "1",
                 ],
                 cwd=REPO_ROOT,
                 text=True,
@@ -1909,6 +1936,11 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertIn(
                 "failed or partial automation runs require", hidden_failure.stderr
             )
+            self.assertEqual(completed_with_failures.returncode, 1)
+            self.assertIn(
+                "automation runs with status completed cannot record failures",
+                completed_with_failures.stderr,
+            )
             self.assertEqual(fake_link.returncode, 1)
             self.assertIn("action not found: 999", fake_link.stderr)
             self.assertEqual(completed_recovery.returncode, 1)
@@ -1916,6 +1948,69 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 "only failed or partial automation runs can be marked for recovery",
                 completed_recovery.stderr,
             )
+            with closing(self.connect(db_path)) as connection:
+                current_rows = connection.execute(
+                    "SELECT id, status, recovery_status FROM automation_runs"
+                ).fetchall()
+            self.assertEqual(current_rows, baseline_rows)
+
+    def test_automation_recover_does_not_reopen_closed_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            recorded = self.run_cli(
+                db_path,
+                "automation",
+                "record",
+                "--source",
+                "linkedin_mcp",
+                "--scope",
+                "FINTECH",
+                "--status",
+                "failed",
+                "--started-at",
+                "2026-04-27T10:00:00+00:00",
+            )
+            run_id = self.stdout_id(recorded)
+            self.run_cli(
+                db_path,
+                "automation",
+                "recover",
+                str(run_id),
+                "resolve",
+                "--notes",
+                "resolved manually",
+            )
+
+            reopened = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "automation",
+                    "recover",
+                    str(run_id),
+                    "retry",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(reopened.returncode, 1)
+            self.assertIn("automation run recovery is already closed", reopened.stderr)
+            with closing(self.connect(db_path)) as connection:
+                row = connection.execute(
+                    """
+                    SELECT recovery_status, recovery_notes
+                    FROM automation_runs
+                    WHERE id = ?
+                    """,
+                    (run_id,),
+                ).fetchone()
+            self.assertEqual(row[0], "manual_resolved")
+            self.assertEqual(row[1], "resolved manually")
 
     def test_query_list_rejects_non_positive_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

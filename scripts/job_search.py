@@ -5221,6 +5221,13 @@ def validate_automation_recovery_status(status: str, recovery_status: str) -> No
         )
 
 
+def validate_automation_failure_count(status: str, failure_count: int) -> None:
+    if status in ("completed", "skipped") and failure_count > 0:
+        raise ValueError(
+            f"automation runs with status {status} cannot record failures"
+        )
+
+
 def encode_id_list(values: list[int] | None) -> str | None:
     if not values:
         return None
@@ -5286,6 +5293,7 @@ def command_automation_record(args: argparse.Namespace) -> int:
     now = utc_now()
     recovery_status = args.recovery_status or automation_recovery_default(args.status)
     validate_automation_recovery_status(args.status, recovery_status)
+    validate_automation_failure_count(args.status, args.failure_count)
     action_ids = encode_id_list(args.action_id)
     artifact_ids = encode_id_list(args.artifact_id)
     query_run_ids = encode_id_list(args.query_run_id)
@@ -5447,7 +5455,7 @@ def command_automation_recover(args: argparse.Namespace) -> int:
     with closing(connect(db_path)) as connection:
         with connection:
             row = connection.execute(
-                "SELECT id, status FROM automation_runs WHERE id = ?",
+                "SELECT id, status, recovery_status FROM automation_runs WHERE id = ?",
                 (args.automation_run_id,),
             ).fetchone()
             if row is None:
@@ -5455,6 +5463,11 @@ def command_automation_recover(args: argparse.Namespace) -> int:
             if row["status"] not in ("failed", "partial"):
                 raise ValueError(
                     "only failed or partial automation runs can be marked for recovery"
+                )
+            if row["recovery_status"] in ("skipped", "manual_resolved"):
+                raise ValueError(
+                    "automation run recovery is already closed; record a new run "
+                    "for further recovery work"
                 )
             connection.execute(
                 """

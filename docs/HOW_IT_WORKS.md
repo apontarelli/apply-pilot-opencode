@@ -441,7 +441,7 @@ Each run captures status, source/scope, start/end timing, counts, failure
 summary, created action/artifact/query-run IDs, concise notes, and recovery
 state. `automation review` is the operator surface for failed and partial runs;
 it shows the stable command-center links and the available recovery choices:
-retry, skip, or manual resolution.
+retry, skip, or `resolve`.
 
 Do not paste unredacted third-party payloads into automation run notes. Keep
 debug captures local under existing policy and reference the local/redacted
