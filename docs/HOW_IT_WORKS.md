@@ -426,6 +426,27 @@ LinkedIn MCP failures:
 - Continue with configured ATS polls, high-priority official career pages, or manual/browser import for a small set of visible promising roles.
 - Do not add jobs from malformed LinkedIn search-result metadata without validating the detail page or canonical company posting.
 
+## Automation Run History
+
+Scheduled and assistive automation runs are recorded separately from raw source
+payloads:
+
+```bash
+python3 scripts/job_search.py automation record --source linkedin_mcp --scope FINTECH --status partial --started-at 2026-04-27T10:00:00+00:00 --ended-at 2026-04-27T10:04:00+00:00 --result-count 3 --failure-count 1 --failure-summary rate_limited --query-run-id 12 --notes "normalized rows imported; raw payload stayed local"
+python3 scripts/job_search.py automation review
+python3 scripts/job_search.py automation recover <run_id> retry --notes "retry with smaller limit"
+```
+
+Each run captures status, source/scope, start/end timing, counts, failure
+summary, created action/artifact/query-run IDs, concise notes, and recovery
+state. `automation review` is the operator surface for failed and partial runs;
+it shows the stable command-center links and the available recovery choices:
+retry, skip, or `resolve`.
+
+Do not paste unredacted third-party payloads into automation run notes. Keep
+debug captures local under existing policy and reference the local/redacted
+debug path only when it helps explain the run.
+
 Noisy broad results:
 
 - Start with narrow problem-domain query packs.

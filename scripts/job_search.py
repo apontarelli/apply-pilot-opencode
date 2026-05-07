@@ -21,7 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = REPO_ROOT / "APPLICATIONS" / "_ops" / "job_search.sqlite"
 DEFAULT_PIPELINE_PATH = REPO_ROOT / "APPLICATIONS" / "_ops" / "job_pipeline.jsonl"
 QUERY_PACK_REGISTRY_PATH = REPO_ROOT / "config" / "job_search_query_packs.json"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 OPEN_ACTION_STATUSES = ("queued", "in_progress", "blocked", "rescheduled")
 TERMINAL_ACTION_STATUSES = ("done", "skipped")
 ACTION_QUEUES = ("screen", "apply", "follow_up", "research", "artifact", "classify")
@@ -37,6 +37,14 @@ QUERY_SOURCES = (
 SOURCE_STATUSES = ("active", "paused", "archived")
 QUERY_RUN_STATUSES = ("planned", "running", "completed", "failed", "partial")
 QUERY_RESULT_STATUSES = ("pending", "accepted", "rejected", "duplicate")
+AUTOMATION_RUN_STATUSES = ("planned", "running", "completed", "failed", "partial", "skipped")
+AUTOMATION_RECOVERY_STATUSES = (
+    "none",
+    "unresolved",
+    "retry_ready",
+    "skipped",
+    "manual_resolved",
+)
 REJECTION_REASONS = (
     "fit_mismatch",
     "level_scope_mismatch",
@@ -435,6 +443,35 @@ CREATE TABLE IF NOT EXISTS query_run_results (
 
 CREATE INDEX IF NOT EXISTS idx_query_run_results_run
     ON query_run_results(query_run_id, ordinal, id);
+
+CREATE TABLE IF NOT EXISTS automation_runs (
+    id INTEGER PRIMARY KEY,
+    source TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    status TEXT NOT NULL
+        CHECK (status IN ('planned', 'running', 'completed', 'failed', 'partial', 'skipped')),
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    result_count INTEGER NOT NULL DEFAULT 0 CHECK (result_count >= 0),
+    failure_count INTEGER NOT NULL DEFAULT 0 CHECK (failure_count >= 0),
+    created_action_count INTEGER NOT NULL DEFAULT 0 CHECK (created_action_count >= 0),
+    created_artifact_count INTEGER NOT NULL DEFAULT 0 CHECK (created_artifact_count >= 0),
+    created_query_run_count INTEGER NOT NULL DEFAULT 0 CHECK (created_query_run_count >= 0),
+    failure_summary TEXT,
+    action_ids TEXT,
+    artifact_ids TEXT,
+    query_run_ids TEXT,
+    notes TEXT,
+    recovery_status TEXT NOT NULL DEFAULT 'none'
+        CHECK (recovery_status IN ('none', 'unresolved', 'retry_ready', 'skipped', 'manual_resolved')),
+    recovery_notes TEXT,
+    raw_source_reference TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_runs_review
+    ON automation_runs(status, recovery_status, started_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY,
@@ -877,6 +914,37 @@ CREATE INDEX IF NOT EXISTS idx_query_run_results_run
     ON query_run_results(query_run_id, ordinal, id);
 """
 
+AUTOMATION_RUN_SCHEMA = """
+CREATE TABLE IF NOT EXISTS automation_runs (
+    id INTEGER PRIMARY KEY,
+    source TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    status TEXT NOT NULL
+        CHECK (status IN ('planned', 'running', 'completed', 'failed', 'partial', 'skipped')),
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    result_count INTEGER NOT NULL DEFAULT 0 CHECK (result_count >= 0),
+    failure_count INTEGER NOT NULL DEFAULT 0 CHECK (failure_count >= 0),
+    created_action_count INTEGER NOT NULL DEFAULT 0 CHECK (created_action_count >= 0),
+    created_artifact_count INTEGER NOT NULL DEFAULT 0 CHECK (created_artifact_count >= 0),
+    created_query_run_count INTEGER NOT NULL DEFAULT 0 CHECK (created_query_run_count >= 0),
+    failure_summary TEXT,
+    action_ids TEXT,
+    artifact_ids TEXT,
+    query_run_ids TEXT,
+    notes TEXT,
+    recovery_status TEXT NOT NULL DEFAULT 'none'
+        CHECK (recovery_status IN ('none', 'unresolved', 'retry_ready', 'skipped', 'manual_resolved')),
+    recovery_notes TEXT,
+    raw_source_reference TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_automation_runs_review
+    ON automation_runs(status, recovery_status, started_at DESC, id DESC);
+"""
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -972,6 +1040,13 @@ def positive_int(value: str) -> int:
     parsed = int(value)
     if parsed < 1:
         raise argparse.ArgumentTypeError("must be greater than 0")
+    return parsed
+
+
+def non_negative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be zero or greater")
     return parsed
 
 
@@ -1371,27 +1446,33 @@ def query_import_results(payload: dict[str, object]) -> list[dict[str, object]]:
         title = payload_string(result, "title", required=True)
         assert title is not None
         canonical_url = normalize_url(payload_string(result, "canonical_url", "url"))
-        normalized.append(
+        normalized_result = {
+            "ordinal": int(result.get("ordinal") or index),
+            "company_name": payload_string(result, "company_name", "company"),
+            "title": title,
+            "canonical_url": canonical_url,
+            "source_job_id": payload_string(result, "source_job_id", "source_id", "id"),
+            "location": payload_string(result, "location"),
+            "remote_status": payload_string(result, "remote_status", "remote"),
+            "compensation_signal": payload_string(result, "compensation_signal", "compensation"),
+            "result_status": result_status(result),
+            "notes": payload_string(result, "notes"),
+            "raw_source_reference": payload_string(
+                result,
+                "raw_source_reference",
+                "raw_reference",
+                "source_reference",
+            ),
+        }
+        normalized_result["raw_payload"] = json.dumps(
             {
-                "ordinal": int(result.get("ordinal") or index),
-                "company_name": payload_string(result, "company_name", "company"),
-                "title": title,
-                "canonical_url": canonical_url,
-                "source_job_id": payload_string(result, "source_job_id", "source_id", "id"),
-                "location": payload_string(result, "location"),
-                "remote_status": payload_string(result, "remote_status", "remote"),
-                "compensation_signal": payload_string(result, "compensation_signal", "compensation"),
-                "result_status": result_status(result),
-                "notes": payload_string(result, "notes"),
-                "raw_source_reference": payload_string(
-                    result,
-                    "raw_source_reference",
-                    "raw_reference",
-                    "source_reference",
-                ),
-                "raw_payload": json.dumps(result, sort_keys=True),
-            }
+                key: value
+                for key, value in normalized_result.items()
+                if value is not None
+            },
+            sort_keys=True,
         )
+        normalized.append(normalized_result)
     return normalized
 
 
@@ -1731,6 +1812,17 @@ def migrate_database(connection: sqlite3.Connection) -> None:
             """,
             (4, "query_run_storage", now),
         )
+        version = 4
+    if version < 5:
+        now = utc_now()
+        connection.executescript(AUTOMATION_RUN_SCHEMA)
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
+            VALUES (?, ?, ?)
+            """,
+            (5, "automation_run_history", now),
+        )
 
 
 def init_database(db_path: Path) -> int:
@@ -1839,6 +1931,15 @@ def read_daily_status(db_path: Path) -> dict[str, object]:
             """,
             (stale_check_before,),
         ).fetchone()
+        automation_recovery = connection.execute(
+            """
+            SELECT status, COUNT(*) AS count
+            FROM automation_runs
+            WHERE status IN ('failed', 'partial')
+                AND recovery_status IN ('unresolved', 'retry_ready')
+            GROUP BY status
+            """
+        ).fetchall()
 
     queue_counts = {queue: 0 for queue in ACTION_QUEUES}
     stale_actions = 0
@@ -1869,6 +1970,9 @@ def read_daily_status(db_path: Path) -> dict[str, object]:
             "with_active_sources": target_coverage["with_active_sources"] or 0,
             "needs_source": target_coverage["needs_source"] or 0,
             "stale_checks": target_coverage["stale_checks"] or 0,
+        },
+        "automation_recovery_counts": {
+            row["status"]: row["count"] for row in automation_recovery
         },
     }
 
@@ -5103,6 +5207,307 @@ def command_query_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def automation_recovery_default(status: str) -> str:
+    if status in ("failed", "partial"):
+        return "unresolved"
+    return "none"
+
+
+def validate_automation_recovery_status(status: str, recovery_status: str) -> None:
+    if status in ("failed", "partial"):
+        if recovery_status == "none":
+            raise ValueError(
+                "failed or partial automation runs require unresolved, retry_ready, "
+                "skipped, or manual_resolved recovery status"
+            )
+        return
+    if recovery_status != "none":
+        raise ValueError(
+            "only failed or partial automation runs may have a recovery status"
+        )
+
+
+def validate_automation_failure_evidence(
+    status: str,
+    *,
+    failure_count: int,
+    failure_summary: str | None,
+    recovery_notes: str | None,
+) -> None:
+    if status not in ("failed", "partial") and (
+        failure_count > 0 or failure_summary
+    ):
+        raise ValueError(
+            "automation runs with failure evidence must use status failed or partial"
+        )
+    if status not in ("failed", "partial") and recovery_notes:
+        raise ValueError(
+            "only failed or partial automation runs may have recovery notes"
+        )
+
+
+def encode_id_list(values: list[int] | None) -> str | None:
+    if not values:
+        return None
+    return ",".join(str(value) for value in values)
+
+
+def validate_existing_ids(
+    connection: sqlite3.Connection,
+    *,
+    table: str,
+    label: str,
+    values: list[int] | None,
+) -> None:
+    if not values:
+        return
+    for value in values:
+        row = connection.execute(
+            f"SELECT id FROM {table} WHERE id = ?",
+            (value,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"{label} not found: {value}")
+
+
+def format_stable_links(row: sqlite3.Row) -> str:
+    links: list[str] = []
+    if row["action_ids"]:
+        links.append(f"actions=#{row['action_ids'].replace(',', ',#')}")
+    if row["artifact_ids"]:
+        links.append(f"artifacts=#{row['artifact_ids'].replace(',', ',#')}")
+    if row["query_run_ids"]:
+        links.append(f"query_runs=#{row['query_run_ids'].replace(',', ',#')}")
+    return " ".join(links) if links else "links=none"
+
+
+def automation_next_step(row: sqlite3.Row) -> str:
+    if row["recovery_status"] == "retry_ready":
+        return "run retry through the same source/scope and record a new automation run"
+    if row["recovery_status"] in ("skipped", "manual_resolved", "none"):
+        return "no recovery action pending"
+    if row["status"] in ("failed", "partial"):
+        return "choose: automation recover retry|skip|resolve"
+    return "no recovery action pending"
+
+
+def print_automation_run(row: sqlite3.Row) -> None:
+    print(
+        f"{row['id']} | source={row['source']} | scope={row['scope']} "
+        f"| status={row['status']} | started={row['started_at']} "
+        f"| ended={row['ended_at'] or 'unset'} | results={row['result_count']} "
+        f"| failures={row['failure_count']} | created="
+        f"actions:{row['created_action_count']},artifacts:{row['created_artifact_count']},"
+        f"query_runs:{row['created_query_run_count']} | recovery={row['recovery_status']} "
+        f"| {format_stable_links(row)}"
+        + render_optional("failure", row["failure_summary"])
+        + render_optional("notes", row["notes"])
+    )
+
+
+def command_automation_record(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    now = utc_now()
+    recovery_status = args.recovery_status or automation_recovery_default(args.status)
+    validate_automation_recovery_status(args.status, recovery_status)
+    validate_automation_failure_evidence(
+        args.status,
+        failure_count=args.failure_count,
+        failure_summary=args.failure_summary,
+        recovery_notes=args.recovery_notes,
+    )
+    action_ids = encode_id_list(args.action_id)
+    artifact_ids = encode_id_list(args.artifact_id)
+    query_run_ids = encode_id_list(args.query_run_id)
+    with closing(connect(db_path)) as connection:
+        with connection:
+            validate_existing_ids(
+                connection,
+                table="actions",
+                label="action",
+                values=args.action_id,
+            )
+            validate_existing_ids(
+                connection,
+                table="artifacts",
+                label="artifact",
+                values=args.artifact_id,
+            )
+            validate_existing_ids(
+                connection,
+                table="query_runs",
+                label="query run",
+                values=args.query_run_id,
+            )
+            cursor = connection.execute(
+                """
+                INSERT INTO automation_runs(
+                    source, scope, status, started_at, ended_at, result_count,
+                    failure_count, created_action_count, created_artifact_count,
+                    created_query_run_count, failure_summary, action_ids,
+                    artifact_ids, query_run_ids, notes, recovery_status,
+                    recovery_notes, raw_source_reference, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    args.source,
+                    args.scope,
+                    args.status,
+                    args.started_at,
+                    args.ended_at,
+                    args.result_count,
+                    args.failure_count,
+                    len(args.action_id or ()),
+                    len(args.artifact_id or ()),
+                    len(args.query_run_id or ()),
+                    args.failure_summary,
+                    action_ids,
+                    artifact_ids,
+                    query_run_ids,
+                    args.notes,
+                    recovery_status,
+                    args.recovery_notes,
+                    args.raw_source_reference,
+                    now,
+                    now,
+                ),
+            )
+            run_id = int(cursor.lastrowid)
+    print(
+        f"automation run recorded id={run_id} source={args.source} scope={args.scope} "
+        f"status={args.status} recovery={recovery_status}"
+    )
+    return 0
+
+
+def automation_rows(
+    connection: sqlite3.Connection,
+    *,
+    status: str | None,
+    review_only: bool,
+    limit: int,
+) -> list[sqlite3.Row]:
+    predicates: list[str] = []
+    params: list[object] = []
+    if review_only:
+        predicates.append("status IN ('failed', 'partial')")
+        predicates.append("recovery_status IN ('unresolved', 'retry_ready')")
+    if status:
+        predicates.append("status = ?")
+        params.append(status)
+    where = f"WHERE {' AND '.join(predicates)}" if predicates else ""
+    params.append(limit)
+    return connection.execute(
+        f"""
+        SELECT *
+        FROM automation_runs
+        {where}
+        ORDER BY started_at DESC, id DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+
+
+def command_automation_list(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    with closing(connect(db_path)) as connection:
+        rows = automation_rows(
+            connection,
+            status=args.status,
+            review_only=False,
+            limit=args.limit,
+        )
+    for row in rows:
+        print_automation_run(row)
+    if not rows:
+        print("no automation runs")
+    return 0
+
+
+def command_automation_review(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    with closing(connect(db_path)) as connection:
+        rows = automation_rows(
+            connection,
+            status=args.status,
+            review_only=True,
+            limit=args.limit,
+        )
+    if not rows:
+        print("no automation runs need recovery")
+        return 0
+    for row in rows:
+        print_automation_run(row)
+        print(f"  recovery_path={automation_next_step(row)}")
+    return 0
+
+
+def command_automation_show(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    with closing(connect(db_path)) as connection:
+        row = connection.execute(
+            "SELECT * FROM automation_runs WHERE id = ?",
+            (args.automation_run_id,),
+        ).fetchone()
+    if row is None:
+        raise ValueError(f"Automation run not found: {args.automation_run_id}")
+    print_automation_run(row)
+    print(f"Recovery: {automation_next_step(row)}")
+    if row["recovery_notes"]:
+        print(f"Recovery notes: {row['recovery_notes']}")
+    if row["raw_source_reference"]:
+        print(f"Raw source reference: {row['raw_source_reference']}")
+    return 0
+
+
+def command_automation_recover(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    recovery_status = {
+        "retry": "retry_ready",
+        "skip": "skipped",
+        "resolve": "manual_resolved",
+    }[args.recovery_command]
+    now = utc_now()
+    with closing(connect(db_path)) as connection:
+        with connection:
+            row = connection.execute(
+                "SELECT id, status, recovery_status FROM automation_runs WHERE id = ?",
+                (args.automation_run_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Automation run not found: {args.automation_run_id}")
+            if row["status"] not in ("failed", "partial"):
+                raise ValueError(
+                    "only failed or partial automation runs can be marked for recovery"
+                )
+            if row["recovery_status"] in ("skipped", "manual_resolved"):
+                raise ValueError(
+                    "automation run recovery is already closed; record a new run "
+                    "for further recovery work"
+                )
+            connection.execute(
+                """
+                UPDATE automation_runs
+                SET recovery_status = ?, recovery_notes = COALESCE(?, recovery_notes),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (recovery_status, args.notes, now, args.automation_run_id),
+            )
+    print(
+        f"automation recovery updated id={args.automation_run_id} "
+        f"recovery={recovery_status}"
+    )
+    return 0
+
+
 def command_job_add(args: argparse.Namespace) -> int:
     db_path = Path(args.db_path)
     require_database(db_path)
@@ -7580,6 +7985,54 @@ def parse_args() -> argparse.Namespace:
         "--reason",
         help="Required for exception packs such as ACCESS.",
     )
+    automation = subparsers.add_parser(
+        "automation", help="Record and review assistive automation runs."
+    )
+    automation_subparsers = automation.add_subparsers(
+        dest="automation_command", metavar="command", required=True
+    )
+    automation_record = automation_subparsers.add_parser(
+        "record", help="Record a scheduled or assistive automation run."
+    )
+    automation_record.add_argument("--source", required=True)
+    automation_record.add_argument("--scope", required=True)
+    automation_record.add_argument("--status", choices=AUTOMATION_RUN_STATUSES, required=True)
+    automation_record.add_argument("--started-at", required=True)
+    automation_record.add_argument("--ended-at")
+    automation_record.add_argument("--result-count", type=non_negative_int, default=0)
+    automation_record.add_argument("--failure-count", type=non_negative_int, default=0)
+    automation_record.add_argument("--failure-summary")
+    automation_record.add_argument("--action-id", type=positive_int, action="append")
+    automation_record.add_argument("--artifact-id", type=positive_int, action="append")
+    automation_record.add_argument("--query-run-id", type=positive_int, action="append")
+    automation_record.add_argument("--notes")
+    automation_record.add_argument("--recovery-status", choices=AUTOMATION_RECOVERY_STATUSES)
+    automation_record.add_argument("--recovery-notes")
+    automation_record.add_argument("--raw-source-reference")
+    automation_list = automation_subparsers.add_parser(
+        "list", help="List automation run history."
+    )
+    automation_list.add_argument("--status", choices=AUTOMATION_RUN_STATUSES)
+    automation_list.add_argument("--limit", type=positive_int, default=20)
+    automation_review = automation_subparsers.add_parser(
+        "review", help="Show failed or partial automation runs needing recovery."
+    )
+    automation_review.add_argument("--status", choices=("failed", "partial"))
+    automation_review.add_argument("--limit", type=positive_int, default=20)
+    automation_show = automation_subparsers.add_parser(
+        "show", help="Show one automation run and recovery path."
+    )
+    automation_show.add_argument("automation_run_id", type=positive_int)
+    automation_recover = automation_subparsers.add_parser(
+        "recover", help="Mark a failed or partial automation run for recovery."
+    )
+    automation_recover.add_argument("automation_run_id", type=positive_int)
+    automation_recover_subparsers = automation_recover.add_subparsers(
+        dest="recovery_command", metavar="choice", required=True
+    )
+    for recovery_choice in ("retry", "skip", "resolve"):
+        recovery = automation_recover_subparsers.add_parser(recovery_choice)
+        recovery.add_argument("--notes")
     job = subparsers.add_parser("job", help="Manage company roles.")
     job_subparsers = job.add_subparsers(dest="job_command", metavar="command", required=True)
     job_add = job_subparsers.add_parser("add", help="Add a job.")
@@ -7820,6 +8273,7 @@ def command_init(args: argparse.Namespace) -> int:
 
 def command_status(args: argparse.Namespace) -> int:
     db_path = Path(args.db_path)
+    require_database(db_path)
     status = read_status(db_path)
     print(
         " | ".join(
@@ -7891,6 +8345,18 @@ def command_status(args: argparse.Namespace) -> int:
         )
     else:
         print("Target coverage: no active target companies")
+    automation_recovery = daily_status["automation_recovery_counts"]
+    if automation_recovery:
+        print(
+            "Automation runs needing recovery: "
+            + ", ".join(
+                f"{status}={automation_recovery[status]}"
+                for status in ("failed", "partial")
+                if status in automation_recovery
+            )
+        )
+    else:
+        print("Automation runs needing recovery: none")
     return 0
 
 
@@ -7985,6 +8451,17 @@ def main() -> int:
                     return command_query_packs_show(args)
             if args.query_command == "run":
                 return command_query_run(args)
+        if args.command == "automation":
+            if args.automation_command == "record":
+                return command_automation_record(args)
+            if args.automation_command == "list":
+                return command_automation_list(args)
+            if args.automation_command == "review":
+                return command_automation_review(args)
+            if args.automation_command == "show":
+                return command_automation_show(args)
+            if args.automation_command == "recover":
+                return command_automation_recover(args)
         if args.command == "job":
             if args.job_command == "add":
                 return command_job_add(args)

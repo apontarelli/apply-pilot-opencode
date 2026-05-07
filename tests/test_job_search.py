@@ -275,9 +275,9 @@ class JobSearchDatabaseTests(unittest.TestCase):
             second = self.run_cli(db_path, "init")
             status = self.run_cli(db_path, "status")
 
-            self.assertIn("schema_version=4", first.stdout)
-            self.assertIn("schema_version=4", second.stdout)
-            self.assertIn("schema_version=4", status.stdout)
+            self.assertIn("schema_version=5", first.stdout)
+            self.assertIn("schema_version=5", second.stdout)
+            self.assertIn("schema_version=5", status.stdout)
             self.assertIn("companies=0", status.stdout)
             self.assertIn("jobs=0", status.stdout)
             self.assertIn("actions=0", status.stdout)
@@ -290,7 +290,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 migration_count = connection.execute(
                     "SELECT COUNT(*) FROM schema_migrations"
                 ).fetchone()[0]
-                self.assertEqual(migration_count, 4)
+                self.assertEqual(migration_count, 5)
             self.assertEqual(db_path.stat().st_mode & 0o777, 0o600)
 
     def test_status_shows_daily_operator_summary(self) -> None:
@@ -359,7 +359,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
 
             status = self.run_cli(db_path, "status")
 
-            self.assertIn("schema_version=4", status.stdout)
+            self.assertIn("schema_version=5", status.stdout)
             self.assertIn("companies=2", status.stdout)
             self.assertIn("jobs=1", status.stdout)
             self.assertIn("actions=3", status.stdout)
@@ -628,7 +628,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 with connection:
                     connection.execute("DROP TABLE query_run_results")
                     connection.execute("DROP TABLE query_runs")
-                    connection.execute("DELETE FROM schema_migrations WHERE version = 4")
+                    connection.execute("DELETE FROM schema_migrations WHERE version >= 4")
 
             result = subprocess.run(
                 [
@@ -1404,8 +1404,8 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 with self.assertRaises(sqlite3.IntegrityError):
                     self.insert_action(connection, company_id)
 
-            self.assertIn("schema_version=4", migrated.stdout)
-            self.assertEqual([row[0] for row in versions], [1, 2, 3, 4])
+            self.assertIn("schema_version=5", migrated.stdout)
+            self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5])
             self.assertEqual(actions[0][0], "queued")
             self.assertEqual(actions[1][0], "skipped")
             self.assertIn("schema v2 migration", actions[1][1])
@@ -1419,7 +1419,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 with connection:
                     connection.execute("DROP TABLE query_run_results")
                     connection.execute("DROP TABLE query_runs")
-                    connection.execute("DELETE FROM schema_migrations WHERE version = 4")
+                    connection.execute("DELETE FROM schema_migrations WHERE version >= 4")
 
             migrated = self.run_cli(db_path, "init")
 
@@ -1431,9 +1431,58 @@ class JobSearchDatabaseTests(unittest.TestCase):
                     "SELECT COUNT(*) FROM query_runs"
                 ).fetchone()[0]
 
-            self.assertIn("schema_version=4", migrated.stdout)
-            self.assertEqual(version, 4)
+            self.assertIn("schema_version=5", migrated.stdout)
+            self.assertEqual(version, 5)
             self.assertEqual(query_run_count, 0)
+
+    def test_init_migrates_existing_database_to_automation_run_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    connection.execute("DROP TABLE automation_runs")
+                    connection.execute("DELETE FROM schema_migrations WHERE version = 5")
+
+            migrated = self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                version = connection.execute(
+                    "SELECT MAX(version) FROM schema_migrations"
+                ).fetchone()[0]
+                automation_run_count = connection.execute(
+                    "SELECT COUNT(*) FROM automation_runs"
+                ).fetchone()[0]
+
+            self.assertIn("schema_version=5", migrated.stdout)
+            self.assertEqual(version, 5)
+            self.assertEqual(automation_run_count, 0)
+
+    def test_status_migrates_existing_database_to_current_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    connection.execute("DROP TABLE automation_runs")
+                    connection.execute("DELETE FROM schema_migrations WHERE version = 5")
+
+            status = self.run_cli(db_path, "status")
+
+            with closing(self.connect(db_path)) as connection:
+                automation_runs_exists = connection.execute(
+                    """
+                    SELECT 1
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'automation_runs'
+                    """
+                ).fetchone()
+
+            self.assertIn("schema_version=5", status.stdout)
+            self.assertIn("Automation runs needing recovery: none", status.stdout)
+            self.assertIsNotNone(automation_runs_exists)
 
     def test_status_reports_uninitialized_database_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1485,6 +1534,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                                 "url": "https://jobs.example.com/stripe/123",
                                 "source_job_id": "123",
                                 "status": "accepted",
+                                "raw_mcp_payload": {"cookie": "secret-cookie"},
                             },
                             {
                                 "company": "Mercury",
@@ -1515,7 +1565,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 run_count = connection.execute("SELECT COUNT(*) FROM query_runs").fetchone()[0]
                 result_rows = connection.execute(
                     """
-                    SELECT result_status, duplicate_job_id
+                    SELECT result_status, duplicate_job_id, raw_payload
                     FROM query_run_results
                     ORDER BY ordinal
                     """
@@ -1537,9 +1587,13 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertEqual(job_count, 1)
             self.assertEqual(run_count, 1)
             self.assertEqual(
-                result_rows,
+                [row[:2] for row in result_rows],
                 [("duplicate", 1), ("accepted", None), ("rejected", None)],
             )
+            serialized_raw_payloads = json.dumps([row[2] for row in result_rows])
+            self.assertIn("Senior Product Manager", serialized_raw_payloads)
+            self.assertNotIn("raw_mcp_payload", serialized_raw_payloads)
+            self.assertNotIn("secret-cookie", serialized_raw_payloads)
 
     def test_query_import_counts_persisted_rows_after_result_key_collision(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1664,6 +1718,332 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertIn("results=12 accepted=0 rejected=0 duplicates=0", result.stdout)
             self.assertIn("Counts: results=12 accepted=0 rejected=0 duplicates=0", shown.stdout)
             self.assertIn("- none", shown.stdout)
+
+    def test_automation_run_history_surfaces_recovery_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Mercury")
+            self.run_cli(
+                db_path,
+                "job",
+                "add",
+                "Mercury",
+                "Product Manager, Banking Platform",
+                "--source",
+                "manual",
+            )
+            action = self.run_cli(
+                db_path,
+                "action",
+                "add",
+                "--company",
+                "Mercury",
+                "--queue",
+                "screen",
+                "--kind",
+                "screen_role",
+                "--notes",
+                "created by poll run",
+            )
+            action_id = self.stdout_id(action)
+            query = self.run_cli(
+                db_path,
+                "query",
+                "import",
+                "--source",
+                "linkedin_mcp",
+                "--pack",
+                "FINTECH",
+                "--query",
+                "product manager banking platform",
+                "--status",
+                "partial",
+                "--result-count",
+                "3",
+                "--notes",
+                "rate_limited after normalized rows",
+            )
+            query_run_id = self.stdout_id(query)
+
+            recorded = self.run_cli(
+                db_path,
+                "automation",
+                "record",
+                "--source",
+                "linkedin_mcp",
+                "--scope",
+                "FINTECH target-company assist",
+                "--status",
+                "partial",
+                "--started-at",
+                "2026-04-27T10:00:00+00:00",
+                "--ended-at",
+                "2026-04-27T10:04:00+00:00",
+                "--result-count",
+                "3",
+                "--failure-count",
+                "1",
+                "--failure-summary",
+                "rate_limited",
+                "--action-id",
+                str(action_id),
+                "--query-run-id",
+                str(query_run_id),
+                "--notes",
+                "three normalized rows imported; raw MCP payload stayed local",
+                "--raw-source-reference",
+                "APPLICATIONS/_ops/query_runs/linkedin-debug-redacted.json",
+            )
+            automation_run_id = self.stdout_id(recorded)
+            review = self.run_cli(db_path, "automation", "review")
+            status = self.run_cli(db_path, "status")
+            recovered = self.run_cli(
+                db_path,
+                "automation",
+                "recover",
+                str(automation_run_id),
+                "retry",
+                "--notes",
+                "retry with smaller limit",
+            )
+            shown = self.run_cli(db_path, "automation", "show", str(automation_run_id))
+
+            self.assertIn(
+                f"automation run recorded id={automation_run_id}", recorded.stdout
+            )
+            self.assertIn("status=partial recovery=unresolved", recorded.stdout)
+            self.assertIn("source=linkedin_mcp", review.stdout)
+            self.assertIn("scope=FINTECH target-company assist", review.stdout)
+            self.assertIn("failures=1", review.stdout)
+            self.assertIn(f"actions=#{action_id}", review.stdout)
+            self.assertIn(f"query_runs=#{query_run_id}", review.stdout)
+            self.assertIn("failure=rate_limited", review.stdout)
+            self.assertIn(
+                "recovery_path=choose: automation recover retry|skip|resolve",
+                review.stdout,
+            )
+            self.assertIn("Automation runs needing recovery: partial=1", status.stdout)
+            self.assertIn("recovery=retry_ready", recovered.stdout)
+            self.assertIn("recovery=retry_ready", shown.stdout)
+            self.assertIn("Recovery notes: retry with smaller limit", shown.stdout)
+            self.assertNotIn("raw_payload", shown.stdout)
+
+    def test_automation_run_history_rejects_misleading_recovery_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            completed = self.run_cli(
+                db_path,
+                "automation",
+                "record",
+                "--source",
+                "manual_browser",
+                "--scope",
+                "ACCESS exception",
+                "--status",
+                "completed",
+                "--started-at",
+                "2026-04-27T10:00:00+00:00",
+            )
+            completed_id = self.stdout_id(completed)
+            with closing(self.connect(db_path)) as connection:
+                baseline_rows = connection.execute(
+                    "SELECT * FROM automation_runs ORDER BY id"
+                ).fetchall()
+
+            hidden_failure = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "automation",
+                    "record",
+                    "--source",
+                    "linkedin_mcp",
+                    "--scope",
+                    "FINTECH",
+                    "--status",
+                    "failed",
+                    "--started-at",
+                    "2026-04-27T10:00:00+00:00",
+                    "--recovery-status",
+                    "none",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+            completed_with_failures = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "automation",
+                    "record",
+                    "--source",
+                    "manual_browser",
+                    "--scope",
+                    "ACCESS exception",
+                    "--status",
+                    "completed",
+                    "--started-at",
+                    "2026-04-27T10:00:00+00:00",
+                    "--failure-count",
+                    "1",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+            completed_with_failure_summary = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "automation",
+                    "record",
+                    "--source",
+                    "manual_browser",
+                    "--scope",
+                    "ACCESS exception",
+                    "--status",
+                    "completed",
+                    "--started-at",
+                    "2026-04-27T10:00:00+00:00",
+                    "--failure-summary",
+                    "rate_limited",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+            fake_link = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "automation",
+                    "record",
+                    "--source",
+                    "linkedin_mcp",
+                    "--scope",
+                    "FINTECH",
+                    "--status",
+                    "partial",
+                    "--started-at",
+                    "2026-04-27T10:00:00+00:00",
+                    "--action-id",
+                    "999",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+            completed_recovery = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "automation",
+                    "recover",
+                    str(completed_id),
+                    "retry",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(hidden_failure.returncode, 1)
+            self.assertIn(
+                "failed or partial automation runs require", hidden_failure.stderr
+            )
+            self.assertEqual(completed_with_failures.returncode, 1)
+            self.assertIn(
+                "automation runs with failure evidence must use status failed or partial",
+                completed_with_failures.stderr,
+            )
+            self.assertEqual(completed_with_failure_summary.returncode, 1)
+            self.assertIn(
+                "automation runs with failure evidence must use status failed or partial",
+                completed_with_failure_summary.stderr,
+            )
+            self.assertEqual(fake_link.returncode, 1)
+            self.assertIn("action not found: 999", fake_link.stderr)
+            self.assertEqual(completed_recovery.returncode, 1)
+            self.assertIn(
+                "only failed or partial automation runs can be marked for recovery",
+                completed_recovery.stderr,
+            )
+            with closing(self.connect(db_path)) as connection:
+                current_rows = connection.execute(
+                    "SELECT * FROM automation_runs ORDER BY id"
+                ).fetchall()
+            self.assertEqual(current_rows, baseline_rows)
+
+    def test_automation_recover_does_not_reopen_closed_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            recorded = self.run_cli(
+                db_path,
+                "automation",
+                "record",
+                "--source",
+                "linkedin_mcp",
+                "--scope",
+                "FINTECH",
+                "--status",
+                "failed",
+                "--started-at",
+                "2026-04-27T10:00:00+00:00",
+            )
+            run_id = self.stdout_id(recorded)
+            self.run_cli(
+                db_path,
+                "automation",
+                "recover",
+                str(run_id),
+                "resolve",
+                "--notes",
+                "resolved manually",
+            )
+
+            reopened = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "automation",
+                    "recover",
+                    str(run_id),
+                    "retry",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(reopened.returncode, 1)
+            self.assertIn("automation run recovery is already closed", reopened.stderr)
+            with closing(self.connect(db_path)) as connection:
+                row = connection.execute(
+                    """
+                    SELECT recovery_status, recovery_notes
+                    FROM automation_runs
+                    WHERE id = ?
+                    """,
+                    (run_id,),
+                ).fetchone()
+            self.assertEqual(row[0], "manual_resolved")
+            self.assertEqual(row[1], "resolved manually")
 
     def test_query_list_rejects_non_positive_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
