@@ -57,6 +57,7 @@ python3 scripts/job_search.py job add --company "Company" --title "Senior Produc
 python3 scripts/job_search.py job list --company "Company"
 python3 scripts/job_search.py action next --queue apply --limit 5
 python3 scripts/job_search.py action list --queue apply --limit 25
+python3 scripts/job_search.py action remind --include-ready
 python3 scripts/job_search.py action done <action_id>
 python3 scripts/job_search.py draft add --company "Company" --type follow_up --title "Follow-up draft" --action-id <action_id> --body "..."
 python3 scripts/job_search.py draft add --company "Company" --type application_answer --title "Application answers" --job-id <job_id> --action-id <action_id> --path APPLICATIONS/READY_TO_APPLY/Company_Role/QA.md --body-file /tmp/answers.md
@@ -149,6 +150,28 @@ Draft write contract:
 - Automation evidence should record created drafts with
   `automation record --draft-id <id>` alongside any action, artifact, or query
   run IDs, so recovery can explain exactly which review artifacts were created.
+
+Use `action remind` for a read-only stale-action reminder pass over existing action
+state:
+
+```bash
+python3 scripts/job_search.py action remind
+python3 scripts/job_search.py action remind --include-ready --record-run
+```
+
+Reminder output surfaces stale, due, and blocked open actions by default; add
+`--include-ready` to include ready open work, and `--as-of` when a deterministic
+review timestamp is needed. Each row includes action ID, queue, kind, status, due
+state, linked company/job/contact/artifact/gap context when present, and a
+recommended `action next --queue <queue>` command. The command never completes,
+skips, reschedules, reprioritizes, rewrites actions, or migrates an old schema; run
+`init` first if the database is behind the current schema. `--record-run` records
+surfaced reminders in `automation_runs` with `result_count` equal to the number of
+surfaced actions. All-clear runs are explicit in output and are not recorded unless
+`--record-all-clear` is also supplied. Automation wrappers can store failed or
+partial reminder runs with `--record-status failed|partial`, `--failure-count`, and
+`--failure-summary`; those runs appear in `automation review` with unresolved
+recovery status.
 
 4. Record the final state in SQLite through `scripts/job_search.py`.
 
