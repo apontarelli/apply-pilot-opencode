@@ -4835,6 +4835,698 @@ class JobSearchDatabaseTests(unittest.TestCase):
             )
             self.assertEqual(action_count, 2)
 
+    def test_automation_poll_targets_records_success_evidence_and_links_actions(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            payload_path = Path(tmpdir) / "greenhouse.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "jobs": [
+                            {
+                                "id": 101,
+                                "title": "Senior Product Manager, Payments",
+                                "absolute_url": "https://boards.greenhouse.io/acme/jobs/101",
+                                "location": {"name": "Remote"},
+                            },
+                            {
+                                "id": 102,
+                                "title": "Customer Support Specialist",
+                                "absolute_url": "https://boards.greenhouse.io/acme/jobs/102",
+                                "location": {"name": "Remote"},
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.run_cli(db_path, "init")
+            self.run_cli(
+                db_path,
+                "company",
+                "add",
+                "Acme",
+                "--lanes",
+                "fintech",
+                "--target-roles",
+                "Product Manager",
+            )
+            source = self.run_cli(
+                db_path,
+                "source",
+                "add",
+                "Acme",
+                "--type",
+                "greenhouse",
+                "--key",
+                "acme",
+                "--url",
+                payload_path.as_uri(),
+            )
+            source_id = self.stdout_id(source)
+
+            first = self.run_cli(
+                db_path,
+                "automation",
+                "poll-targets",
+                "--source-id",
+                str(source_id),
+            )
+            first_run_id_match = re.search(r"run_id=(\d+)", first.stdout)
+            self.assertIsNotNone(first_run_id_match, first.stdout)
+            first_run_id = int(first_run_id_match.group(1))
+            second = self.run_cli(
+                db_path,
+                "automation",
+                "poll-targets",
+                "--source-id",
+                str(source_id),
+            )
+            second_run_id_match = re.search(r"run_id=(\d+)", second.stdout)
+            self.assertIsNotNone(second_run_id_match, second.stdout)
+            second_run_id = int(second_run_id_match.group(1))
+
+            self.assertIn("status=completed sources=1 results=2", first.stdout)
+            self.assertIn("inserted=2 ignored=1 duplicates=0", first.stdout)
+            self.assertIn("screen_actions=1", first.stdout)
+            self.assertIn("status=completed sources=1 results=2", second.stdout)
+            self.assertIn("inserted=0 ignored=0 duplicates=2", second.stdout)
+            self.assertIn("screen_actions=0", second.stdout)
+
+            with closing(self.connect(db_path)) as connection:
+                jobs = connection.execute(
+                    """
+                    SELECT title, status, fit_score, lane
+                    FROM jobs
+                    ORDER BY id
+                    """
+                ).fetchall()
+                action = connection.execute(
+                    "SELECT id, notes FROM actions WHERE queue = 'screen'"
+                ).fetchone()
+                first_run = connection.execute(
+                    """
+                    SELECT source, scope, status, result_count, failure_count,
+                        created_action_count, action_ids, notes, recovery_status,
+                        raw_source_reference
+                    FROM automation_runs
+                    WHERE id = ?
+                    """,
+                    (first_run_id,),
+                ).fetchone()
+                second_run = connection.execute(
+                    """
+                    SELECT status, result_count, failure_count, created_action_count,
+                        action_ids, notes, recovery_status
+                    FROM automation_runs
+                    WHERE id = ?
+                    """,
+                    (second_run_id,),
+                ).fetchone()
+                job_count = connection.execute(
+                    "SELECT COUNT(*) FROM jobs"
+                ).fetchone()[0]
+
+            self.assertEqual(
+                jobs,
+                [
+                    ("Senior Product Manager, Payments", "screening", 75, "fintech"),
+                    ("Customer Support Specialist", "ignored_by_filter", 35, "fintech"),
+                ],
+            )
+            self.assertEqual(first_run[0], "target_company_poll")
+            self.assertEqual(first_run[1], f"source_ids={source_id}")
+            self.assertEqual(first_run[2], "completed")
+            self.assertEqual(first_run[3], 2)
+            self.assertEqual(first_run[4], 0)
+            self.assertEqual(first_run[5], 1)
+            self.assertEqual(first_run[6], str(action[0]))
+            self.assertIn("ignored=1 duplicates=0", first_run[7])
+            self.assertEqual(first_run[8], "none")
+            self.assertEqual(first_run[9], f"source_ids={source_id}")
+            self.assertIn(f"automation_run=#{first_run_id}", action[1])
+            self.assertEqual(second_run[0], "completed")
+            self.assertEqual(second_run[1], 2)
+            self.assertEqual(second_run[2], 0)
+            self.assertEqual(second_run[3], 0)
+            self.assertIsNone(second_run[4])
+            self.assertIn("duplicates=2", second_run[5])
+            self.assertEqual(second_run[6], "none")
+            self.assertEqual(job_count, 2)
+
+    def test_automation_poll_targets_records_partial_failure_and_recovery(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            good_payload_path = Path(tmpdir) / "good.json"
+            good_payload_path.write_text(
+                json.dumps(
+                    {
+                        "jobs": [
+                            {
+                                "id": 201,
+                                "title": "Senior Product Manager, Payments",
+                                "absolute_url": "https://boards.greenhouse.io/good/jobs/201",
+                                "location": {"name": "Remote"},
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.run_cli(db_path, "init")
+            for company in ("Bad Co", "Good Co"):
+                self.run_cli(
+                    db_path,
+                    "company",
+                    "add",
+                    company,
+                    "--lanes",
+                    "fintech",
+                    "--target-roles",
+                    "Product Manager",
+                )
+            self.run_cli(
+                db_path,
+                "source",
+                "add",
+                "Bad Co",
+                "--type",
+                "greenhouse",
+                "--key",
+                "bad",
+                "--url",
+                (Path(tmpdir) / "missing.json").as_uri(),
+            )
+            self.run_cli(
+                db_path,
+                "source",
+                "add",
+                "Good Co",
+                "--type",
+                "greenhouse",
+                "--key",
+                "good",
+                "--url",
+                good_payload_path.as_uri(),
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "automation",
+                    "poll-targets",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+            run_id_match = re.search(r"run_id=(\d+)", result.stdout)
+            self.assertIsNotNone(run_id_match, result.stdout)
+            run_id = int(run_id_match.group(1))
+            review = self.run_cli(db_path, "automation", "review")
+            recovered = self.run_cli(
+                db_path,
+                "automation",
+                "recover",
+                str(run_id),
+                "retry",
+                "--notes",
+                "retry failed source after checking source URL",
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("company=Bad Co type=greenhouse failed error=", result.stdout)
+            self.assertIn(
+                "company=Good Co type=greenhouse discovered=1 inserted=1",
+                result.stdout,
+            )
+            self.assertIn(
+                "status=partial sources=2 results=1 failures=1",
+                result.stdout,
+            )
+            self.assertIn(f"{run_id} | source=target_company_poll", review.stdout)
+            self.assertIn("recovery_path=choose: automation recover retry|skip|resolve", review.stdout)
+            self.assertIn("recovery=retry_ready", recovered.stdout)
+
+            with closing(self.connect(db_path)) as connection:
+                run = connection.execute(
+                    """
+                    SELECT status, result_count, failure_count, created_action_count,
+                        failure_summary, recovery_status, action_ids, notes
+                    FROM automation_runs
+                    WHERE id = ?
+                    """,
+                    (run_id,),
+                ).fetchone()
+                action = connection.execute(
+                    "SELECT id, notes FROM actions WHERE queue = 'screen'"
+                ).fetchone()
+                job_count = connection.execute(
+                    "SELECT COUNT(*) FROM jobs"
+                ).fetchone()[0]
+
+            self.assertEqual(run[0], "partial")
+            self.assertEqual(run[1], 1)
+            self.assertEqual(run[2], 1)
+            self.assertEqual(run[3], 1)
+            self.assertIn("company=Bad Co", run[4])
+            self.assertEqual(run[5], "retry_ready")
+            self.assertEqual(run[6], str(action[0]))
+            self.assertIn("sources=2 inserted=1", run[7])
+            self.assertIn(f"automation_run=#{run_id}", action[1])
+            self.assertEqual(job_count, 1)
+
+    def test_automation_poll_targets_records_db_failure_and_continues(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            bad_payload_path = Path(tmpdir) / "bad.json"
+            good_payload_path = Path(tmpdir) / "good.json"
+            for payload_path, company_key, job_id in (
+                (bad_payload_path, "bad", 301),
+                (good_payload_path, "good", 302),
+            ):
+                payload_path.write_text(
+                    json.dumps(
+                        {
+                            "jobs": [
+                                {
+                                    "id": job_id,
+                                    "title": "Senior Product Manager, Payments",
+                                    "absolute_url": (
+                                        "https://boards.greenhouse.io/"
+                                        f"{company_key}/jobs/{job_id}"
+                                    ),
+                                    "location": {"name": "Remote"},
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            self.run_cli(db_path, "init")
+            for company in ("Bad Co", "Good Co"):
+                self.run_cli(
+                    db_path,
+                    "company",
+                    "add",
+                    company,
+                    "--lanes",
+                    "fintech",
+                    "--target-roles",
+                    "Product Manager",
+                )
+            self.run_cli(
+                db_path,
+                "source",
+                "add",
+                "Bad Co",
+                "--type",
+                "greenhouse",
+                "--key",
+                "bad",
+                "--url",
+                bad_payload_path.as_uri(),
+            )
+            self.run_cli(
+                db_path,
+                "source",
+                "add",
+                "Good Co",
+                "--type",
+                "greenhouse",
+                "--key",
+                "good",
+                "--url",
+                good_payload_path.as_uri(),
+            )
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    connection.execute(
+                        """
+                        CREATE TRIGGER fail_bad_source_poll
+                        BEFORE UPDATE OF last_polled_at ON company_sources
+                        WHEN OLD.source_key = 'bad'
+                        BEGIN
+                            SELECT RAISE(
+                                ABORT,
+                                'simulated source metadata write failure'
+                            );
+                        END;
+                        """
+                    )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "automation",
+                    "poll-targets",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+            run_id_match = re.search(r"run_id=(\d+)", result.stdout)
+            self.assertIsNotNone(run_id_match, result.stdout)
+            run_id = int(run_id_match.group(1))
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(
+                "company=Bad Co type=greenhouse failed "
+                "error=simulated source metadata write failure",
+                result.stdout,
+            )
+            self.assertIn(
+                "company=Good Co type=greenhouse discovered=1 inserted=1",
+                result.stdout,
+            )
+            self.assertIn("status=partial sources=2 results=1 failures=1", result.stdout)
+            self.assertNotIn("Traceback", result.stderr)
+
+            with closing(self.connect(db_path)) as connection:
+                jobs = connection.execute(
+                    "SELECT source, source_job_id FROM jobs ORDER BY source"
+                ).fetchall()
+                source_rows = connection.execute(
+                    """
+                    SELECT source_key, last_polled_at
+                    FROM company_sources
+                    ORDER BY source_key
+                    """
+                ).fetchall()
+                run = connection.execute(
+                    """
+                    SELECT status, result_count, failure_count,
+                        created_action_count, failure_summary, action_ids
+                    FROM automation_runs
+                    WHERE id = ?
+                    """,
+                    (run_id,),
+                ).fetchone()
+
+            self.assertEqual(jobs, [("greenhouse:good", "302")])
+            self.assertEqual([row[0] for row in source_rows], ["bad", "good"])
+            self.assertIsNone(source_rows[0][1])
+            self.assertIsNotNone(source_rows[1][1])
+            self.assertEqual(run[0], "partial")
+            self.assertEqual(run[1], 1)
+            self.assertEqual(run[2], 1)
+            self.assertEqual(run[3], 1)
+            self.assertIn("simulated source metadata write failure", run[4])
+            self.assertIsNotNone(run[5])
+
+    def test_automation_poll_targets_records_missing_requested_source_as_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            payload_path = Path(tmpdir) / "paused.json"
+            payload_path.write_text(json.dumps({"jobs": []}), encoding="utf-8")
+
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Paused Co")
+            source = self.run_cli(
+                db_path,
+                "source",
+                "add",
+                "Paused Co",
+                "--type",
+                "greenhouse",
+                "--key",
+                "paused",
+                "--url",
+                payload_path.as_uri(),
+                "--status",
+                "paused",
+            )
+            source_id = self.stdout_id(source)
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "automation",
+                    "poll-targets",
+                    "--source-id",
+                    str(source_id),
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+            run_id_match = re.search(r"run_id=(\d+)", result.stdout)
+            self.assertIsNotNone(run_id_match, result.stdout)
+            run_id = int(run_id_match.group(1))
+            review = self.run_cli(db_path, "automation", "review")
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(
+                "failed error=requested source is not an active source in scope",
+                result.stdout,
+            )
+            self.assertIn("status=failed sources=1 results=0 failures=1", result.stdout)
+            self.assertIn(f"{run_id} | source=target_company_poll", review.stdout)
+            self.assertIn("failures=1", review.stdout)
+
+            with closing(self.connect(db_path)) as connection:
+                run = connection.execute(
+                    """
+                    SELECT status, result_count, failure_count, failure_summary,
+                        recovery_status
+                    FROM automation_runs
+                    WHERE id = ?
+                    """,
+                    (run_id,),
+                ).fetchone()
+                job_count = connection.execute(
+                    "SELECT COUNT(*) FROM jobs"
+                ).fetchone()[0]
+
+            self.assertEqual(run[0], "failed")
+            self.assertEqual(run[1], 0)
+            self.assertEqual(run[2], 1)
+            self.assertIn(f"source_id={source_id}", run[3])
+            self.assertEqual(run[4], "unresolved")
+            self.assertEqual(job_count, 0)
+
+    def test_automation_poll_targets_records_missing_requested_company_as_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "automation",
+                    "poll-targets",
+                    "--company",
+                    "Typo Co",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+            run_id_match = re.search(r"run_id=(\d+)", result.stdout)
+            self.assertIsNotNone(run_id_match, result.stdout)
+            run_id = int(run_id_match.group(1))
+            review = self.run_cli(db_path, "automation", "review")
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(
+                "company=Typo Co type=unknown failed error=requested company was not found",
+                result.stdout,
+            )
+            self.assertIn("status=failed sources=1 results=0 failures=1", result.stdout)
+            self.assertIn(f"{run_id} | source=target_company_poll", review.stdout)
+
+            with closing(self.connect(db_path)) as connection:
+                run = connection.execute(
+                    """
+                    SELECT scope, status, result_count, failure_count,
+                        failure_summary, recovery_status
+                    FROM automation_runs
+                    WHERE id = ?
+                    """,
+                    (run_id,),
+                ).fetchone()
+
+            self.assertEqual(run[0], "company=Typo Co")
+            self.assertEqual(run[1], "failed")
+            self.assertEqual(run[2], 0)
+            self.assertEqual(run[3], 1)
+            self.assertIn("requested company was not found", run[4])
+            self.assertEqual(run[5], "unresolved")
+
+    def test_automation_poll_targets_records_company_without_active_sources_as_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            payload_path = Path(tmpdir) / "paused.json"
+            payload_path.write_text(json.dumps({"jobs": []}), encoding="utf-8")
+
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Paused Co")
+            self.run_cli(
+                db_path,
+                "source",
+                "add",
+                "Paused Co",
+                "--type",
+                "greenhouse",
+                "--key",
+                "paused",
+                "--url",
+                payload_path.as_uri(),
+                "--status",
+                "paused",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "automation",
+                    "poll-targets",
+                    "--company",
+                    "Paused Co",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+            run_id_match = re.search(r"run_id=(\d+)", result.stdout)
+            self.assertIsNotNone(run_id_match, result.stdout)
+            run_id = int(run_id_match.group(1))
+            review = self.run_cli(db_path, "automation", "review")
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(
+                "company=Paused Co type=unknown failed error=requested company has no active ATS sources in scope",
+                result.stdout,
+            )
+            self.assertIn("status=failed sources=1 results=0 failures=1", result.stdout)
+            self.assertIn(f"{run_id} | source=target_company_poll", review.stdout)
+
+            with closing(self.connect(db_path)) as connection:
+                run = connection.execute(
+                    """
+                    SELECT scope, status, result_count, failure_count,
+                        failure_summary, recovery_status
+                    FROM automation_runs
+                    WHERE id = ?
+                    """,
+                    (run_id,),
+                ).fetchone()
+
+            self.assertEqual(run[0], "company=Paused Co")
+            self.assertEqual(run[1], "failed")
+            self.assertEqual(run[2], 0)
+            self.assertEqual(run[3], 1)
+            self.assertIn("no active ATS sources", run[4])
+            self.assertEqual(run[5], "unresolved")
+
+    def test_automation_poll_targets_records_all_source_failures_as_failed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(
+                db_path,
+                "company",
+                "add",
+                "Broken Co",
+                "--lanes",
+                "fintech",
+                "--target-roles",
+                "Product Manager",
+            )
+            self.run_cli(
+                db_path,
+                "source",
+                "add",
+                "Broken Co",
+                "--type",
+                "greenhouse",
+                "--key",
+                "broken",
+                "--url",
+                (Path(tmpdir) / "missing.json").as_uri(),
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "automation",
+                    "poll-targets",
+                    "--company",
+                    "Broken Co",
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+            run_id_match = re.search(r"run_id=(\d+)", result.stdout)
+            self.assertIsNotNone(run_id_match, result.stdout)
+            run_id = int(run_id_match.group(1))
+            review = self.run_cli(db_path, "automation", "review")
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("company=Broken Co type=greenhouse failed error=", result.stdout)
+            self.assertIn("status=failed sources=1 results=0 failures=1", result.stdout)
+            self.assertIn(f"{run_id} | source=target_company_poll", review.stdout)
+            self.assertIn("failures=1", review.stdout)
+
+            with closing(self.connect(db_path)) as connection:
+                run = connection.execute(
+                    """
+                    SELECT status, result_count, failure_count, created_action_count,
+                        failure_summary, recovery_status, action_ids
+                    FROM automation_runs
+                    WHERE id = ?
+                    """,
+                    (run_id,),
+                ).fetchone()
+                job_count = connection.execute(
+                    "SELECT COUNT(*) FROM jobs"
+                ).fetchone()[0]
+
+            self.assertEqual(run[0], "failed")
+            self.assertEqual(run[1], 0)
+            self.assertEqual(run[2], 1)
+            self.assertEqual(run[3], 0)
+            self.assertIn("company=Broken Co", run[4])
+            self.assertEqual(run[5], "unresolved")
+            self.assertIsNone(run[6])
+            self.assertEqual(job_count, 0)
+
     def test_metrics_aggregates_weekly_review_counts(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "job_search.sqlite"

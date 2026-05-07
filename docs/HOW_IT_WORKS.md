@@ -42,6 +42,7 @@ python3 scripts/job_search.py company list
 python3 scripts/job_search.py source add "Company" --type greenhouse --key <board-token>
 python3 scripts/job_search.py source list --company "Company"
 python3 scripts/job_search.py poll --company "Company"
+python3 scripts/job_search.py automation poll-targets --company "Company"
 python3 scripts/job_search.py query import --file APPLICATIONS/_ops/query-runs/fintech.json
 python3 scripts/job_search.py query import --source manual_browser --pack FINTECH --query "senior product manager payroll" --result-count 12 --raw-source-reference manual-2026-04-29
 python3 scripts/job_search.py query list
@@ -324,6 +325,9 @@ Configured target-company polling is source-first.
   includes company thesis, target roles, career URL, and ATS source details.
 - Add explicit ATS sources with `source add`.
 - Poll configured active sources with `poll`.
+- Use `automation poll-targets` for schedulable preparation runs that poll only
+  active Greenhouse, Lever, and Ashby sources, persist the normal jobs/actions
+  output, and record `automation_runs` evidence with recovery state.
 - Prefer Greenhouse, Lever, and Ashby APIs before official career-page browsing.
 - Use official company career pages as manual/browser fallback when no ATS source is configured.
 - Workday support should wait until a target company justifies it.
@@ -478,6 +482,8 @@ payloads:
 
 ```bash
 python3 scripts/job_search.py automation record --source linkedin_mcp --scope FINTECH --status partial --started-at 2026-04-27T10:00:00+00:00 --ended-at 2026-04-27T10:04:00+00:00 --result-count 3 --failure-count 1 --failure-summary rate_limited --query-run-id 12 --notes "normalized rows imported; raw payload stayed local"
+python3 scripts/job_search.py automation poll-targets --company "Company"
+python3 scripts/job_search.py automation poll-targets --source-id 12 --source-id 13
 python3 scripts/job_search.py automation review
 python3 scripts/job_search.py automation recover <run_id> retry --notes "retry with smaller limit"
 ```
@@ -487,6 +493,15 @@ summary, created action/artifact/query-run IDs, concise notes, and recovery
 state. `automation review` is the operator surface for failed and partial runs;
 it shows the stable command-center links and the available recovery choices:
 retry, skip, or `resolve`.
+
+`automation poll-targets` wraps the same source polling as `poll`: successful
+sources create the normal job ledger rows, weak matches stay
+`ignored_by_filter`, promising roles create reviewable `screen` actions, and
+duplicates are skipped by the existing duplicate rules. The automation run links
+created screen actions in `action_ids` and appends the run ID to those action
+notes for review. If one source fails while another succeeds, the run is
+`partial`; if all selected sources fail, it is `failed`; both states appear in
+`automation review` until recovered.
 
 Evidence expectations:
 
