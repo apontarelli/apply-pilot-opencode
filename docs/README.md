@@ -6,6 +6,7 @@ This directory is the durable documentation map for the job-search system.
 
 - [Product Strategy](PRODUCT_STRATEGY.md): product thesis, problem, promise, milestones, success metrics, and open product questions.
 - [How It Works](HOW_IT_WORKS.md): current command-center behavior, operator workflow, SQLite state, polling, LinkedIn handoff, query-pack validation, and command examples.
+- [Automation approval boundary](HOW_IT_WORKS.md#automation-approval-boundary): durable guardrail for allowed preparation, explicit human approval gates, and run-history evidence expectations.
 - [Manual smoke tests](manual-smoke-tests/): daily and targeted manual checks for command-center flows.
 
 ## Boundaries

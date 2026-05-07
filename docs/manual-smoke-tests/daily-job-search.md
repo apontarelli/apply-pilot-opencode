@@ -48,6 +48,17 @@ Source of truth: `APPLICATIONS/_ops/job_search.sqlite`.
 
   Evidence on failure: capture which queue failed and the output for that queue.
 
+- [ ] Review failed or partial automation runs that may need recovery:
+
+  ```bash
+  python3 scripts/job_search.py automation review
+  ```
+
+  Evidence on failure: capture the full command output and exit code. Evidence
+  on open items: capture run IDs, status, recovery status, linked records, and
+  the safe next choice. Do not retry, skip, or resolve a run unless the operator
+  explicitly chose that recovery action.
+
 ## Post-Session
 
 - [ ] Review funnel and hygiene metrics:
@@ -87,6 +98,18 @@ Source of truth: `APPLICATIONS/_ops/job_search.sqlite`.
   Evidence on failure: capture the action ID, intended queue, command output,
   and whether the related event, job, artifact, gap, or company state was
   already updated.
+
+- [ ] If automation ran during the session, confirm its run-history evidence:
+
+  ```bash
+  python3 scripts/job_search.py automation review
+  ```
+
+  Expected evidence: successful runs link created records and counts; partial
+  or failed runs show source/scope, timing when known, failure summary, recovery
+  state, and concise operator notes. External sends, submissions, browser form
+  submits, raw payload persistence, and deterministic rule changes remain
+  manual approval boundaries.
 
 ## Safe Recording Check
 

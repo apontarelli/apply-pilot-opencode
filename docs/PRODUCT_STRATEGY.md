@@ -92,6 +92,23 @@ Boundary rules:
 - External side effects remain manual: no autonomous application submission and
   no automated outreach.
 
+## Safe Assistive Automation Guardrail
+
+Safe automation may prepare work, surface recommendations, and record audit
+history. It must stop before any external write or irreversible decision unless
+Antonio gives explicit human approval for that specific action. The
+authoritative implementation guardrail is
+[How It Works: Automation Approval Boundary](HOW_IT_WORKS.md#automation-approval-boundary);
+automation tickets should reference that section instead of restating policy.
+
+Product posture:
+
+- allowed automation prepares, drafts, classifies, dedupes, queues, polls
+  reviewed sources, and records run history for human review
+- external writes, submissions, outreach, browser form submits, deterministic
+  rule changes, raw payload persistence, new external integrations, and
+  unattended schedulers stay behind explicit human approval
+
 ## Core Product Surfaces
 
 ### Command Center
@@ -182,7 +199,8 @@ review, tracked in Linear as SID-180.
 
 Status: shipped baseline.
 
-- `/apply` transforms a pasted JD into assessment, resume, cover letter, outreach, and DOCX materials.
+- `/apply` transforms a pasted JD into assessment, resume, cover-letter,
+  optional outreach draft, and DOCX materials for human review.
 - Base resume lanes exist for FINTECH, AI, and DESIGN.
 - `$job-apply` routes a ready JD to a resume lane and produces concise application answers.
 
@@ -267,6 +285,9 @@ Deliverables:
 - stale-action reminders
 - automated query-run preparation for approved sources
 - saved drafts for follow-ups or application answers
+- classification and triage recommendations that remain advisory
+- run-history evidence and recovery state for successful, failed, and partial
+  automation
 - explicit human approval before any outreach or submission
 
 ## Success Metrics

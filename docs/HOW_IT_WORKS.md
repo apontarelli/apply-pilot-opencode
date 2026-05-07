@@ -91,10 +91,10 @@ python3 scripts/job_search.py event list --company "Company"
 3. Process queued work by queue:
 
 - `screen`: evaluate fresh roles.
-- `apply`: submit ready roles.
-- `follow_up`: timed relationship or application follow-ups.
+- `apply`: prepare ready roles for Antonio's manual submission.
+- `follow_up`: timed relationship or application follow-up preparation.
 - `research`: fill company, role, or domain gaps.
-- `artifact`: build or send targeted proof.
+- `artifact`: build targeted proof; sending it requires explicit human approval.
 - `classify`: record outcomes, rejection reasons, or stale state.
 
 Use a direct review command for each daily lane:
@@ -276,6 +276,10 @@ python3 scripts/job_search.py job update <job_id> --status applied --application
 python3 scripts/job_search.py action done <action_id> --notes "application submitted; outcome=pending_response"
 ```
 
+Use those commands only after Antonio confirms the application was submitted.
+Automation may prepare the final package and submit checklist, but it must not
+mark a role `applied` on inference alone.
+
 For a screening pass before application:
 
 ```bash
@@ -426,7 +430,48 @@ LinkedIn MCP failures:
 - Continue with configured ATS polls, high-priority official career pages, or manual/browser import for a small set of visible promising roles.
 - Do not add jobs from malformed LinkedIn search-result metadata without validating the detail page or canonical company posting.
 
-## Automation Run History
+## Automation Approval Boundary
+
+Safe assistive automation is preparation, not external execution. It may read
+approved sources, prepare records, suggest classifications, draft materials, and
+record run history. It must stop before application submission, outreach,
+browser form submission, unapproved deterministic rule changes, or raw
+third-party payload persistence. Automation implementation tickets should
+reference this section instead of restating the approval policy.
+
+Allowed automation:
+
+- configured-source polling for reviewed Greenhouse, Lever, and Ashby sources
+- command-center-visible reminders for stale, due, blocked, or ready actions
+- approved-source query-run preparation and local import payload preparation
+- classification suggestions, LLM triage recommendations, and fit/risk
+  explanations
+- draft follow-ups, application answers, cover letters, and saved package files
+  marked for review
+- duplicate detection, queue creation, and suggested next actions
+- `automation_runs` recording, review, and recovery-state updates
+
+Explicit human approval is required before:
+
+- submitting an application or marking a role `applied` without confirmation
+- sending outreach, follow-ups, connection requests, emails, or LinkedIn
+  messages
+- submitting browser forms, clicking final external confirmation buttons, or
+  writing to an external account on Antonio's behalf
+- changing deterministic rules such as target-role filters, query-pack defaults,
+  cooldown policy, classification taxonomy, strategy docs, or resume/profile
+  positioning based only on an automation suggestion
+- persisting full raw third-party payloads beyond local/redacted debug capture
+- enabling new external notification channels, account integrations, or
+  unattended schedulers
+
+Agents should stop and ask for explicit direction when the next step would cross
+one of those approval boundaries, when a draft is ready to send or submit, when
+an automation recommendation would mutate durable strategy or deterministic
+rules, when source details are contradictory or malformed, or when a failed or
+partial run needs a non-obvious recovery choice.
+
+### Automation Run History
 
 Scheduled and assistive automation runs are recorded separately from raw source
 payloads:
@@ -442,6 +487,19 @@ summary, created action/artifact/query-run IDs, concise notes, and recovery
 state. `automation review` is the operator surface for failed and partial runs;
 it shows the stable command-center links and the available recovery choices:
 retry, skip, or `resolve`.
+
+Evidence expectations:
+
+- successful runs record source/scope, start/end timing, reviewed result counts,
+  created job/action/artifact/query-run IDs, duplicate or ignored counts when
+  relevant, and a concise note explaining what is ready for human review
+- partial runs record the usable subset, missing or failed subset, linked
+  records created before interruption, failure summary, recovery status, and the
+  exact safe next choice such as retry with smaller scope, skip, or manual
+  resolve
+- failed runs record source/scope, start/end timing when known, zero or partial
+  counts, failure class, recovery status, whether any records were created, and
+  enough operator notes to avoid repeating the same failure blindly
 
 Do not paste unredacted third-party payloads into automation run notes. Keep
 debug captures local under existing policy and reference the local/redacted

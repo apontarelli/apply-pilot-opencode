@@ -44,6 +44,9 @@ Use `scripts/job_search.py` to keep cross-session state current:
 - `python3 scripts/job_search.py event list --company "Company"`
 
 If the user only has a LinkedIn URL, wants to search for roles, or needs job validation before applying, use `$job-search` first.
+Use `docs/HOW_IT_WORKS.md#automation-approval-boundary` as the durable policy
+for submission, outreach, browser-form, deterministic-rule, raw-payload, and
+run-history approval boundaries.
 
 ## Default Workflow
 
@@ -78,6 +81,10 @@ If the user only has a LinkedIn URL, wants to search for roles, or needs job val
    - `ignored_by_filter` when the role does not survive deeper vetting
    - `discovered` or `screening` when the role is plausible but not worth immediate submission
 8. If Antonio later says he submitted, update the ledger to `applied`
+
+Do not submit applications, submit browser forms, click final external
+confirmation buttons, send outreach, or mark a role `applied` without explicit
+human confirmation for that action.
 
 Assume the JD came from one of:
 - pasted job text
@@ -197,5 +204,8 @@ If yes, update one of:
 - `YOUR_PROFILE/USER_BULLETS.md`
 
 Also update `scripts/job_search.py` outputs when the recurring issue is pipeline-related.
+Treat reusable profile, playbook, strategy, and deterministic workflow edits as
+human-approved maintenance decisions, not automatic mutations from one
+application suggestion.
 
 Do not let repo maintenance block the immediate application task.
