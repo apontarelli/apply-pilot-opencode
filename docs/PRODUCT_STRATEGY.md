@@ -261,6 +261,8 @@ Status: planned.
 
 Goal: automate preparation without crossing human-submission boundaries.
 
+Technical approach: [Safe Assistive Automation](SAFE_ASSISTIVE_AUTOMATION.md).
+
 Deliverables:
 
 - scheduled target-company polling
