@@ -275,9 +275,9 @@ class JobSearchDatabaseTests(unittest.TestCase):
             second = self.run_cli(db_path, "init")
             status = self.run_cli(db_path, "status")
 
-            self.assertIn("schema_version=5", first.stdout)
-            self.assertIn("schema_version=5", second.stdout)
-            self.assertIn("schema_version=5", status.stdout)
+            self.assertIn("schema_version=6", first.stdout)
+            self.assertIn("schema_version=6", second.stdout)
+            self.assertIn("schema_version=6", status.stdout)
             self.assertIn("companies=0", status.stdout)
             self.assertIn("jobs=0", status.stdout)
             self.assertIn("actions=0", status.stdout)
@@ -290,7 +290,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 migration_count = connection.execute(
                     "SELECT COUNT(*) FROM schema_migrations"
                 ).fetchone()[0]
-                self.assertEqual(migration_count, 5)
+                self.assertEqual(migration_count, 6)
             self.assertEqual(db_path.stat().st_mode & 0o777, 0o600)
 
     def test_status_shows_daily_operator_summary(self) -> None:
@@ -359,7 +359,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
 
             status = self.run_cli(db_path, "status")
 
-            self.assertIn("schema_version=5", status.stdout)
+            self.assertIn("schema_version=6", status.stdout)
             self.assertIn("companies=2", status.stdout)
             self.assertIn("jobs=1", status.stdout)
             self.assertIn("actions=3", status.stdout)
@@ -1404,8 +1404,8 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 with self.assertRaises(sqlite3.IntegrityError):
                     self.insert_action(connection, company_id)
 
-            self.assertIn("schema_version=5", migrated.stdout)
-            self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5])
+            self.assertIn("schema_version=6", migrated.stdout)
+            self.assertEqual([row[0] for row in versions], [1, 2, 3, 4, 5, 6])
             self.assertEqual(actions[0][0], "queued")
             self.assertEqual(actions[1][0], "skipped")
             self.assertIn("schema v2 migration", actions[1][1])
@@ -1431,8 +1431,8 @@ class JobSearchDatabaseTests(unittest.TestCase):
                     "SELECT COUNT(*) FROM query_runs"
                 ).fetchone()[0]
 
-            self.assertIn("schema_version=5", migrated.stdout)
-            self.assertEqual(version, 5)
+            self.assertIn("schema_version=6", migrated.stdout)
+            self.assertEqual(version, 6)
             self.assertEqual(query_run_count, 0)
 
     def test_init_migrates_existing_database_to_automation_run_schema(self) -> None:
@@ -1443,7 +1443,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
             with closing(self.connect(db_path)) as connection:
                 with connection:
                     connection.execute("DROP TABLE automation_runs")
-                    connection.execute("DELETE FROM schema_migrations WHERE version = 5")
+                    connection.execute("DELETE FROM schema_migrations WHERE version >= 5")
 
             migrated = self.run_cli(db_path, "init")
 
@@ -1455,8 +1455,8 @@ class JobSearchDatabaseTests(unittest.TestCase):
                     "SELECT COUNT(*) FROM automation_runs"
                 ).fetchone()[0]
 
-            self.assertIn("schema_version=5", migrated.stdout)
-            self.assertEqual(version, 5)
+            self.assertIn("schema_version=6", migrated.stdout)
+            self.assertEqual(version, 6)
             self.assertEqual(automation_run_count, 0)
 
     def test_status_migrates_existing_database_to_current_schema(self) -> None:
@@ -1467,7 +1467,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
             with closing(self.connect(db_path)) as connection:
                 with connection:
                     connection.execute("DROP TABLE automation_runs")
-                    connection.execute("DELETE FROM schema_migrations WHERE version = 5")
+                    connection.execute("DELETE FROM schema_migrations WHERE version >= 5")
 
             status = self.run_cli(db_path, "status")
 
@@ -1480,7 +1480,7 @@ class JobSearchDatabaseTests(unittest.TestCase):
                     """
                 ).fetchone()
 
-            self.assertIn("schema_version=5", status.stdout)
+            self.assertIn("schema_version=6", status.stdout)
             self.assertIn("Automation runs needing recovery: none", status.stdout)
             self.assertIsNotNone(automation_runs_exists)
 
@@ -6140,6 +6140,300 @@ class JobSearchDatabaseTests(unittest.TestCase):
                     ("message_sent", 1),
                 ],
             )
+
+    def test_draft_follow_up_is_review_only_and_keeps_source_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Mercury")
+            job_id = self.stdout_id(
+                self.run_cli(
+                    db_path,
+                    "job",
+                    "add",
+                    "Mercury",
+                    "Product Manager, Banking Platform",
+                    "--source",
+                    "manual",
+                )
+            )
+            contact_id = self.stdout_id(
+                self.run_cli(
+                    db_path,
+                    "contact",
+                    "add",
+                    "--company",
+                    "Mercury",
+                    "--name",
+                    "Alex Rivera",
+                )
+            )
+            action_id = self.stdout_id(
+                self.run_cli(
+                    db_path,
+                    "action",
+                    "add",
+                    "--company",
+                    "Mercury",
+                    "--queue",
+                    "follow_up",
+                    "--kind",
+                    "follow_up",
+                    "--job-id",
+                    str(job_id),
+                    "--contact-id",
+                    str(contact_id),
+                )
+            )
+
+            created = self.run_cli(
+                db_path,
+                "draft",
+                "add",
+                "--company",
+                "Mercury",
+                "--type",
+                "follow_up",
+                "--title",
+                "Follow up with Alex",
+                "--job-id",
+                str(job_id),
+                "--contact-id",
+                str(contact_id),
+                "--action-id",
+                str(action_id),
+                "--source-summary",
+                "follow_up queue",
+                "--body",
+                "Quick follow-up draft.",
+            )
+            draft_id = self.stdout_id(created)
+            listed = self.run_cli(db_path, "draft", "list", "--company", "Mercury")
+            rejected = self.run_cli(
+                db_path,
+                "draft",
+                "status",
+                str(draft_id),
+                "rejected",
+                "--notes",
+                "Too generic.",
+            )
+
+            self.assertIn("review_only=unsent_unsubmitted", created.stdout)
+            self.assertIn("approval_required=before_external_side_effect", listed.stdout)
+            self.assertIn(f"action=follow_up", listed.stdout)
+            self.assertIn("contact=Alex Rivera", listed.stdout)
+            self.assertIn("external_side_effect=false", rejected.stdout)
+            with closing(self.connect(db_path)) as connection:
+                events = connection.execute(
+                    "SELECT event_type, notes FROM events ORDER BY id"
+                ).fetchall()
+            self.assertTrue(any(row[0] == "draft_created" for row in events))
+            self.assertTrue(any(row[0] == "draft_rejected" for row in events))
+            self.assertFalse(any(row[0] == "message_sent" for row in events))
+            self.assertFalse(any(row[0] == "application_submitted" for row in events))
+
+    def test_application_answer_draft_writes_unsubmitted_package_file_and_run_link(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Stripe")
+            job_id = self.stdout_id(
+                self.run_cli(
+                    db_path,
+                    "job",
+                    "add",
+                    "Stripe",
+                    "AI Workflow Product Manager",
+                    "--source",
+                    "manual",
+                    "--status",
+                    "ready_to_apply",
+                    "--application-folder",
+                    "APPLICATIONS/READY_TO_APPLY/Stripe_AI_Workflow_Product_Manager",
+                )
+            )
+            action_id = self.stdout_id(
+                self.run_cli(
+                    db_path,
+                    "action",
+                    "add",
+                    "--company",
+                    "Stripe",
+                    "--queue",
+                    "apply",
+                    "--kind",
+                    "apply",
+                    "--job-id",
+                    str(job_id),
+                )
+            )
+            draft_path = (
+                Path(tmpdir)
+                / "APPLICATIONS"
+                / "READY_TO_APPLY"
+                / "Stripe_AI_Workflow_Product_Manager"
+                / "QA.md"
+            )
+
+            created = self.run_cli(
+                db_path,
+                "draft",
+                "add",
+                "--company",
+                "Stripe",
+                "--type",
+                "application_answer",
+                "--title",
+                "Application answers",
+                "--job-id",
+                str(job_id),
+                "--action-id",
+                str(action_id),
+                "--path",
+                str(draft_path),
+                "--source-summary",
+                "ready JD answer prompt",
+                "--body",
+                "Why Stripe? Because the role fits workflow automation proof.",
+            )
+            draft_id = self.stdout_id(created)
+            recorded = self.run_cli(
+                db_path,
+                "automation",
+                "record",
+                "--source",
+                "codex",
+                "--scope",
+                "draft application answers",
+                "--status",
+                "completed",
+                "--started-at",
+                "2026-05-07T10:00:00+00:00",
+                "--ended-at",
+                "2026-05-07T10:01:00+00:00",
+                "--draft-id",
+                str(draft_id),
+                "--action-id",
+                str(action_id),
+                "--notes",
+                "saved review-only QA package",
+            )
+            automation_run_id = self.stdout_id(recorded)
+            shown = self.run_cli(db_path, "automation", "show", str(automation_run_id))
+            contents = draft_path.read_text(encoding="utf-8")
+
+            self.assertIn("REVIEW ONLY - UNSUBMITTED", contents)
+            self.assertIn(f"action=#{action_id}", contents)
+            self.assertIn("Do not send or submit from this file.", contents)
+            self.assertIn("drafts:1", shown.stdout)
+            self.assertIn(f"drafts=#{draft_id}", shown.stdout)
+            with closing(self.connect(db_path)) as connection:
+                event_types = [
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT event_type FROM events ORDER BY id"
+                    ).fetchall()
+                ]
+            self.assertIn("draft_created", event_types)
+            self.assertNotIn("application_submitted", event_types)
+
+    def test_draft_add_requires_concrete_source_link(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Mercury")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "draft",
+                    "add",
+                    "--company",
+                    "Mercury",
+                    "--type",
+                    "follow_up",
+                    "--title",
+                    "Weak provenance",
+                    "--source-summary",
+                    "company-only note",
+                    "--body",
+                    "No concrete source link.",
+                ],
+                cwd=REPO_ROOT,
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("draft requires at least one source link", result.stderr)
+            with closing(self.connect(db_path)) as connection:
+                draft_count = connection.execute("SELECT COUNT(*) FROM drafts").fetchone()[0]
+                draft_event_count = connection.execute(
+                    "SELECT COUNT(*) FROM events WHERE event_type = 'draft_created'"
+                ).fetchone()[0]
+            self.assertEqual(draft_count, 0)
+            self.assertEqual(draft_event_count, 0)
+
+    def test_draft_add_rejects_out_of_package_path_without_orphaning_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            outside_path = Path(tmpdir) / "outside.md"
+            self.run_cli(db_path, "init")
+            self.run_cli(db_path, "company", "add", "Stripe")
+            job_id = self.stdout_id(
+                self.run_cli(
+                    db_path,
+                    "job",
+                    "add",
+                    "Stripe",
+                    "AI Workflow Product Manager",
+                    "--source",
+                    "manual",
+                )
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "draft",
+                    "add",
+                    "--company",
+                    "Stripe",
+                    "--type",
+                    "application_answer",
+                    "--title",
+                    "Application answers",
+                    "--job-id",
+                    str(job_id),
+                    "--path",
+                    str(outside_path),
+                    "--body",
+                    "Should not be written outside package roots.",
+                ],
+                cwd=REPO_ROOT,
+                check=False,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("draft path must be under APPLICATIONS/READY_TO_APPLY", result.stderr)
+            self.assertFalse(outside_path.exists())
+            with closing(self.connect(db_path)) as connection:
+                draft_count = connection.execute("SELECT COUNT(*) FROM drafts").fetchone()[0]
+                draft_event_count = connection.execute(
+                    "SELECT COUNT(*) FROM events WHERE event_type = 'draft_created'"
+                ).fetchone()[0]
+            self.assertEqual(draft_count, 0)
+            self.assertEqual(draft_event_count, 0)
 
 
 if __name__ == "__main__":
