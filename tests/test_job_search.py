@@ -2045,6 +2045,264 @@ class JobSearchDatabaseTests(unittest.TestCase):
             self.assertEqual(row[0], "manual_resolved")
             self.assertEqual(row[1], "resolved manually")
 
+    def test_automation_prepare_query_run_records_linked_review_package(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            payload_path = Path(tmpdir) / "fintech.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "query": "senior product manager payroll",
+                        "results": [
+                            {
+                                "company": "Stripe",
+                                "title": "Senior Product Manager, Payroll",
+                                "url": "https://example.com/stripe-payroll",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.run_cli(db_path, "init")
+
+            result = self.run_cli(
+                db_path,
+                "automation",
+                "prepare-query-run",
+                "--source",
+                "linkedin_mcp",
+                "--pack",
+                "FINTECH",
+                "--file",
+                str(payload_path),
+            )
+
+            self.assertIn("query run created id=1 source=linkedin_mcp", result.stdout)
+            self.assertIn(
+                "automation query run prepared id=1 source=linkedin_mcp "
+                "pack=FINTECH status=completed query_run_id=1 recovery=none",
+                result.stdout,
+            )
+            with closing(self.connect(db_path)) as connection:
+                automation = connection.execute(
+                    """
+                    SELECT created_query_run_count, query_run_ids,
+                        created_action_count, created_artifact_count, notes
+                    FROM automation_runs
+                    """
+                ).fetchone()
+                query_run = connection.execute(
+                    "SELECT id, notes FROM query_runs"
+                ).fetchone()
+                jobs = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+            self.assertEqual(automation[0], 1)
+            self.assertEqual(automation[1], str(query_run[0]))
+            self.assertEqual(automation[2], 0)
+            self.assertEqual(automation[3], 0)
+            self.assertIn("accepted-job creation remains manual", automation[4])
+            self.assertIn("human review required", query_run[1])
+            self.assertEqual(jobs, 0)
+
+    def test_automation_prepare_query_run_update_links_without_new_created_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            payload_path = Path(tmpdir) / "fintech.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "query": "senior product manager payroll",
+                        "raw_source_reference": "linkedin:prepared:1",
+                        "results": [
+                            {
+                                "company": "Stripe",
+                                "title": "Senior Product Manager, Payroll",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.run_cli(db_path, "init")
+            self.run_cli(
+                db_path,
+                "automation",
+                "prepare-query-run",
+                "--source",
+                "linkedin_mcp",
+                "--pack",
+                "FINTECH",
+                "--file",
+                str(payload_path),
+            )
+
+            second = self.run_cli(
+                db_path,
+                "automation",
+                "prepare-query-run",
+                "--source",
+                "linkedin_mcp",
+                "--pack",
+                "FINTECH",
+                "--file",
+                str(payload_path),
+            )
+
+            self.assertIn("query run updated id=1", second.stdout)
+            with closing(self.connect(db_path)) as connection:
+                rows = connection.execute(
+                    """
+                    SELECT created_query_run_count, query_run_ids
+                    FROM automation_runs
+                    ORDER BY id
+                    """
+                ).fetchall()
+            self.assertEqual(rows[0], (1, "1"))
+            self.assertEqual(rows[1], (0, "1"))
+
+    def test_automation_prepare_query_run_requires_exception_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            payload_path = Path(tmpdir) / "access.json"
+            payload_path.write_text(
+                json.dumps({"query": "trust product manager", "results": []}),
+                encoding="utf-8",
+            )
+            self.run_cli(db_path, "init")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(CLI),
+                    "--db-path",
+                    str(db_path),
+                    "automation",
+                    "prepare-query-run",
+                    "--source",
+                    "manual_browser",
+                    "--pack",
+                    "ACCESS",
+                    "--file",
+                    str(payload_path),
+                ],
+                cwd=REPO_ROOT,
+                text=True,
+                capture_output=True,
+            )
+
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("Query pack ACCESS is an exception pack", result.stderr)
+            with closing(self.connect(db_path)) as connection:
+                self.assertEqual(
+                    connection.execute("SELECT COUNT(*) FROM query_runs").fetchone()[0],
+                    0,
+                )
+                self.assertEqual(
+                    connection.execute("SELECT COUNT(*) FROM automation_runs").fetchone()[0],
+                    0,
+                )
+
+    def test_automation_prepare_query_run_records_failed_source_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            payload_path = Path(tmpdir) / "failed.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "query": "senior product manager payroll",
+                        "status": "failed",
+                        "result_count": 0,
+                        "notes": "failure_class=rate_limited",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.run_cli(db_path, "init")
+
+            result = self.run_cli(
+                db_path,
+                "automation",
+                "prepare-query-run",
+                "--source",
+                "linkedin_mcp",
+                "--pack",
+                "FINTECH",
+                "--file",
+                str(payload_path),
+            )
+
+            self.assertIn("status=failed query_run_id=1 recovery=unresolved", result.stdout)
+            with closing(self.connect(db_path)) as connection:
+                automation = connection.execute(
+                    "SELECT status, failure_count, failure_summary, recovery_status, query_run_ids FROM automation_runs"
+                ).fetchone()
+            self.assertEqual(automation[0], "failed")
+            self.assertEqual(automation[1], 1)
+            self.assertEqual(automation[2], "rate_limited")
+            self.assertEqual(automation[3], "unresolved")
+            self.assertEqual(automation[4], "1")
+
+    def test_automation_prepare_query_run_preserves_duplicate_result_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "job_search.sqlite"
+            payload_path = Path(tmpdir) / "duplicate.json"
+            payload_path.write_text(
+                json.dumps(
+                    {
+                        "query": "senior product manager payroll",
+                        "results": [
+                            {
+                                "company": "Stripe",
+                                "title": "Senior Product Manager, Payroll",
+                                "url": "https://example.com/stripe-payroll",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.run_cli(db_path, "init")
+            with closing(self.connect(db_path)) as connection:
+                with connection:
+                    company_id = self.insert_company(connection, "Stripe")
+                    self.insert_job(
+                        connection,
+                        company_id,
+                        title="Senior Product Manager, Payroll",
+                    )
+                    connection.execute(
+                        "UPDATE jobs SET canonical_url = ? WHERE company_id = ?",
+                        ("https://example.com/stripe-payroll", company_id),
+                    )
+
+            result = self.run_cli(
+                db_path,
+                "automation",
+                "prepare-query-run",
+                "--source",
+                "linkedin_mcp",
+                "--pack",
+                "FINTECH",
+                "--file",
+                str(payload_path),
+            )
+
+            self.assertIn("duplicates=1", result.stdout)
+            with closing(self.connect(db_path)) as connection:
+                row = connection.execute(
+                    """
+                    SELECT result_status, duplicate_job_id, duplicate_reason
+                    FROM query_run_results
+                    """
+                ).fetchone()
+                automation = connection.execute(
+                    "SELECT query_run_ids, result_count FROM automation_runs"
+                ).fetchone()
+            self.assertEqual(row[0], "duplicate")
+            self.assertEqual(row[2], "normalized_url")
+            self.assertEqual(automation[0], "1")
+            self.assertEqual(automation[1], 1)
+
     def test_query_list_rejects_non_positive_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "job_search.sqlite"

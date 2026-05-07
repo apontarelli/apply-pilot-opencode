@@ -301,6 +301,20 @@ class CompanyImportOutcome:
 
 
 @dataclass(frozen=True)
+class QueryImportOutcome:
+    query_run_id: int
+    import_state: str
+    source: str
+    pack: str | None
+    status: str
+    result_count: int
+    accepted_count: int
+    rejected_count: int
+    duplicate_count: int
+    raw_source_reference: str | None
+
+
+@dataclass(frozen=True)
 class CooldownEvidence:
     signal: str
     job_id: int
@@ -1397,14 +1411,7 @@ def parse_json_object(value: str, *, label: str) -> dict[str, object]:
 def read_query_import_payload(args: argparse.Namespace) -> dict[str, object]:
     payload: dict[str, object] = {}
     if args.file:
-        path = Path(args.file)
-        try:
-            parsed = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as error:
-            raise ValueError(f"Invalid query import file {path}: {error.msg}") from error
-        if not isinstance(parsed, dict):
-            raise ValueError(f"Invalid query import file {path}: expected JSON object")
-        payload.update(parsed)
+        payload.update(read_query_import_file(args.file))
 
     field_map = {
         "source": args.source,
@@ -1431,6 +1438,17 @@ def read_query_import_payload(args: argparse.Namespace) -> dict[str, object]:
         )
         payload["results"] = results
     return payload
+
+
+def read_query_import_file(path_text: str) -> dict[str, object]:
+    path = Path(path_text)
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"Invalid query import file {path}: {error.msg}") from error
+    if not isinstance(parsed, dict):
+        raise ValueError(f"Invalid query import file {path}: expected JSON object")
+    return parsed
 
 
 def payload_string(
@@ -4978,10 +4996,12 @@ def command_poll(args: argparse.Namespace) -> int:
     return 1 if run_result.failure_count else 0
 
 
-def command_query_import(args: argparse.Namespace) -> int:
-    db_path = Path(args.db_path)
-    require_database(db_path)
-    payload = read_query_import_payload(args)
+def import_query_run_payload(
+    connection: sqlite3.Connection,
+    payload: dict[str, object],
+    *,
+    now: str,
+) -> QueryImportOutcome:
     source = payload_string(payload, "source", required=True)
     query_text = payload_string(payload, "query_text", "query", required=True)
     assert source is not None
@@ -5009,198 +5029,219 @@ def command_query_import(args: argparse.Namespace) -> int:
         sort_mode=sort_mode,
         raw_source_reference=raw_source_reference,
     )
-    now = utc_now()
+    existing = connection.execute(
+        "SELECT id FROM query_runs WHERE import_key = ?",
+        (import_key,),
+    ).fetchone()
+    if existing is None:
+        cursor = connection.execute(
+            """
+            INSERT INTO query_runs(
+                source, pack, query_text, sort_mode, status, notes,
+                raw_source_reference, import_key, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                source,
+                pack,
+                query_text,
+                sort_mode,
+                status,
+                notes,
+                raw_source_reference,
+                import_key,
+                now,
+                now,
+            ),
+        )
+        query_run_id = int(cursor.lastrowid)
+        import_state = "created"
+    else:
+        query_run_id = int(existing["id"])
+        connection.execute(
+            """
+            UPDATE query_runs
+            SET source = ?, pack = ?, query_text = ?, sort_mode = ?,
+                status = ?, notes = ?, raw_source_reference = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                source,
+                pack,
+                query_text,
+                sort_mode,
+                status,
+                notes,
+                raw_source_reference,
+                now,
+                query_run_id,
+            ),
+        )
+        connection.execute(
+            "DELETE FROM query_run_results WHERE query_run_id = ?",
+            (query_run_id,),
+        )
+        import_state = "updated"
 
+    for result in results:
+        duplicate = duplicate_for_query_result(
+            connection,
+            source=source,
+            result=result,
+            now=now,
+        )
+        final_status = str(result["result_status"])
+        duplicate_job_id = None
+        duplicate_level = None
+        duplicate_reason = None
+        if duplicate is not None:
+            final_status = "duplicate"
+            duplicate_job_id = duplicate["job_id"]
+            duplicate_level = duplicate["level"]
+            duplicate_reason = duplicate["reason"]
+        result_key = query_result_key(
+            company_name=(
+                str(result["company_name"])
+                if result["company_name"]
+                else None
+            ),
+            title=str(result["title"]),
+            canonical_url=(
+                str(result["canonical_url"])
+                if result["canonical_url"]
+                else None
+            ),
+            source_job_id=(
+                str(result["source_job_id"])
+                if result["source_job_id"]
+                else None
+            ),
+            location=str(result["location"]) if result["location"] else None,
+            raw_source_reference=(
+                str(result["raw_source_reference"])
+                if result["raw_source_reference"]
+                else None
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO query_run_results(
+                query_run_id, ordinal, company_name, title, canonical_url,
+                source_job_id, location, remote_status, compensation_signal,
+                result_status, duplicate_job_id, duplicate_level,
+                duplicate_reason, notes, raw_source_reference, raw_payload,
+                result_key, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(query_run_id, result_key) DO UPDATE SET
+                ordinal = excluded.ordinal,
+                company_name = excluded.company_name,
+                title = excluded.title,
+                canonical_url = excluded.canonical_url,
+                source_job_id = excluded.source_job_id,
+                location = excluded.location,
+                remote_status = excluded.remote_status,
+                compensation_signal = excluded.compensation_signal,
+                result_status = excluded.result_status,
+                duplicate_job_id = excluded.duplicate_job_id,
+                duplicate_level = excluded.duplicate_level,
+                duplicate_reason = excluded.duplicate_reason,
+                notes = excluded.notes,
+                raw_source_reference = excluded.raw_source_reference,
+                raw_payload = excluded.raw_payload,
+                updated_at = excluded.updated_at
+            """,
+            (
+                query_run_id,
+                result["ordinal"],
+                result["company_name"],
+                result["title"],
+                result["canonical_url"],
+                result["source_job_id"],
+                result["location"],
+                result["remote_status"],
+                result["compensation_signal"],
+                final_status,
+                duplicate_job_id,
+                duplicate_level,
+                duplicate_reason,
+                result["notes"],
+                result["raw_source_reference"],
+                result["raw_payload"],
+                result_key,
+                now,
+                now,
+            ),
+        )
+
+    counts = {"accepted": 0, "rejected": 0, "duplicate": 0}
+    if results:
+        count_rows = connection.execute(
+            """
+            SELECT result_status, COUNT(*) AS status_count
+            FROM query_run_results
+            WHERE query_run_id = ?
+            GROUP BY result_status
+            """,
+            (query_run_id,),
+        ).fetchall()
+        result_count = sum(int(row["status_count"]) for row in count_rows)
+        for row in count_rows:
+            status_key = str(row["result_status"])
+            if status_key in counts:
+                counts[status_key] = int(row["status_count"])
+
+    connection.execute(
+        """
+        UPDATE query_runs
+        SET result_count = ?, accepted_count = ?, rejected_count = ?,
+            duplicate_count = ?, updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            result_count,
+            counts["accepted"],
+            counts["rejected"],
+            counts["duplicate"],
+            now,
+            query_run_id,
+        ),
+    )
+    return QueryImportOutcome(
+        query_run_id=query_run_id,
+        import_state=import_state,
+        source=source,
+        pack=pack,
+        status=status,
+        result_count=result_count,
+        accepted_count=counts["accepted"],
+        rejected_count=counts["rejected"],
+        duplicate_count=counts["duplicate"],
+        raw_source_reference=raw_source_reference,
+    )
+
+
+def print_query_import_outcome(outcome: QueryImportOutcome) -> None:
+    print(
+        f"query run {outcome.import_state} id={outcome.query_run_id} source={outcome.source}"
+        + render_optional("pack", outcome.pack)
+        + f" status={outcome.status} results={outcome.result_count}"
+        + f" accepted={outcome.accepted_count} rejected={outcome.rejected_count}"
+        + f" duplicates={outcome.duplicate_count}"
+    )
+
+
+def command_query_import(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    payload = read_query_import_payload(args)
+    now = utc_now()
     with closing(connect(db_path)) as connection:
         with connection:
-            existing = connection.execute(
-                "SELECT id FROM query_runs WHERE import_key = ?",
-                (import_key,),
-            ).fetchone()
-            if existing is None:
-                cursor = connection.execute(
-                    """
-                    INSERT INTO query_runs(
-                        source, pack, query_text, sort_mode, status, notes,
-                        raw_source_reference, import_key, created_at, updated_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        source,
-                        pack,
-                        query_text,
-                        sort_mode,
-                        status,
-                        notes,
-                        raw_source_reference,
-                        import_key,
-                        now,
-                        now,
-                    ),
-                )
-                query_run_id = int(cursor.lastrowid)
-                import_state = "created"
-            else:
-                query_run_id = int(existing["id"])
-                connection.execute(
-                    """
-                    UPDATE query_runs
-                    SET source = ?, pack = ?, query_text = ?, sort_mode = ?,
-                        status = ?, notes = ?, raw_source_reference = ?,
-                        updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        source,
-                        pack,
-                        query_text,
-                        sort_mode,
-                        status,
-                        notes,
-                        raw_source_reference,
-                        now,
-                        query_run_id,
-                    ),
-                )
-                connection.execute(
-                    "DELETE FROM query_run_results WHERE query_run_id = ?",
-                    (query_run_id,),
-                )
-                import_state = "updated"
-
-            for result in results:
-                duplicate = duplicate_for_query_result(
-                    connection,
-                    source=source,
-                    result=result,
-                    now=now,
-                )
-                final_status = str(result["result_status"])
-                duplicate_job_id = None
-                duplicate_level = None
-                duplicate_reason = None
-                if duplicate is not None:
-                    final_status = "duplicate"
-                    duplicate_job_id = duplicate["job_id"]
-                    duplicate_level = duplicate["level"]
-                    duplicate_reason = duplicate["reason"]
-                result_key = query_result_key(
-                    company_name=(
-                        str(result["company_name"])
-                        if result["company_name"]
-                        else None
-                    ),
-                    title=str(result["title"]),
-                    canonical_url=(
-                        str(result["canonical_url"])
-                        if result["canonical_url"]
-                        else None
-                    ),
-                    source_job_id=(
-                        str(result["source_job_id"])
-                        if result["source_job_id"]
-                        else None
-                    ),
-                    location=str(result["location"]) if result["location"] else None,
-                    raw_source_reference=(
-                        str(result["raw_source_reference"])
-                        if result["raw_source_reference"]
-                        else None
-                    ),
-                )
-                connection.execute(
-                    """
-                    INSERT INTO query_run_results(
-                        query_run_id, ordinal, company_name, title, canonical_url,
-                        source_job_id, location, remote_status, compensation_signal,
-                        result_status, duplicate_job_id, duplicate_level,
-                        duplicate_reason, notes, raw_source_reference, raw_payload,
-                        result_key, created_at, updated_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(query_run_id, result_key) DO UPDATE SET
-                        ordinal = excluded.ordinal,
-                        company_name = excluded.company_name,
-                        title = excluded.title,
-                        canonical_url = excluded.canonical_url,
-                        source_job_id = excluded.source_job_id,
-                        location = excluded.location,
-                        remote_status = excluded.remote_status,
-                        compensation_signal = excluded.compensation_signal,
-                        result_status = excluded.result_status,
-                        duplicate_job_id = excluded.duplicate_job_id,
-                        duplicate_level = excluded.duplicate_level,
-                        duplicate_reason = excluded.duplicate_reason,
-                        notes = excluded.notes,
-                        raw_source_reference = excluded.raw_source_reference,
-                        raw_payload = excluded.raw_payload,
-                        updated_at = excluded.updated_at
-                    """,
-                    (
-                        query_run_id,
-                        result["ordinal"],
-                        result["company_name"],
-                        result["title"],
-                        result["canonical_url"],
-                        result["source_job_id"],
-                        result["location"],
-                        result["remote_status"],
-                        result["compensation_signal"],
-                        final_status,
-                        duplicate_job_id,
-                        duplicate_level,
-                        duplicate_reason,
-                        result["notes"],
-                        result["raw_source_reference"],
-                        result["raw_payload"],
-                        result_key,
-                        now,
-                        now,
-                    ),
-                )
-
-            counts = {"accepted": 0, "rejected": 0, "duplicate": 0}
-            if results:
-                count_rows = connection.execute(
-                    """
-                    SELECT result_status, COUNT(*) AS status_count
-                    FROM query_run_results
-                    WHERE query_run_id = ?
-                    GROUP BY result_status
-                    """,
-                    (query_run_id,),
-                ).fetchall()
-                result_count = sum(int(row["status_count"]) for row in count_rows)
-                for row in count_rows:
-                    status_key = str(row["result_status"])
-                    if status_key in counts:
-                        counts[status_key] = int(row["status_count"])
-
-            connection.execute(
-                """
-                UPDATE query_runs
-                SET result_count = ?, accepted_count = ?, rejected_count = ?,
-                    duplicate_count = ?, updated_at = ?
-                WHERE id = ?
-                """,
-                (
-                    result_count,
-                    counts["accepted"],
-                    counts["rejected"],
-                    counts["duplicate"],
-                    now,
-                    query_run_id,
-                ),
-            )
-
-    print(
-        f"query run {import_state} id={query_run_id} source={source}"
-        + render_optional("pack", pack)
-        + f" status={status} results={result_count}"
-        + f" accepted={counts['accepted']} rejected={counts['rejected']}"
-        + f" duplicates={counts['duplicate']}"
-    )
+            outcome = import_query_run_payload(connection, payload, now=now)
+    print_query_import_outcome(outcome)
     return 0
 
 
@@ -5801,6 +5842,114 @@ def command_automation_poll_targets(args: argparse.Namespace) -> int:
         f"screen_actions={len(run_result.screen_action_ids)}"
     )
     return 1 if status in ("failed", "partial") else 0
+
+
+def automation_status_from_query_status(status: str) -> str:
+    if status in ("completed", "failed", "partial"):
+        return status
+    return "planned"
+
+
+def failure_summary_from_query_notes(notes: str | None) -> str | None:
+    if not notes:
+        return None
+    match = re.search(r"\bfailure_class=([a-z0-9_]+)", notes)
+    if match:
+        return match.group(1)
+    return None
+
+
+def command_automation_prepare_query_run(args: argparse.Namespace) -> int:
+    db_path = Path(args.db_path)
+    require_database(db_path)
+    pack = get_query_pack(args.pack)
+    reason = validate_query_pack_run(pack, args.reason)
+    payload = read_query_import_file(args.file)
+    payload_source = payload_string(payload, "source")
+    payload_pack = payload_string(payload, "pack")
+    if payload_source and payload_source != args.source:
+        raise ValueError(
+            f"automation prepare-query-run source mismatch: "
+            f"--source {args.source} but payload source is {payload_source}"
+        )
+    if payload_pack and payload_pack.strip().upper() != pack.name:
+        raise ValueError(
+            f"automation prepare-query-run pack mismatch: "
+            f"--pack {pack.name} but payload pack is {payload_pack}"
+        )
+    payload["source"] = args.source
+    payload["pack"] = pack.name
+    notes = payload_string(payload, "notes")
+    evidence_notes = ["prepared query run; human review required before accepting jobs"]
+    if reason:
+        evidence_notes.append(f"reason={reason}")
+    if notes:
+        evidence_notes.append(notes)
+    payload["notes"] = "; ".join(evidence_notes)
+
+    now = utc_now()
+    started_at = args.started_at or now
+    ended_at = args.ended_at or now
+    with closing(connect(db_path)) as connection:
+        with connection:
+            outcome = import_query_run_payload(connection, payload, now=now)
+            status = automation_status_from_query_status(outcome.status)
+            failure_count = args.failure_count
+            if status in ("failed", "partial") and failure_count == 0:
+                failure_count = 1
+            failure_summary = args.failure_summary
+            if status in ("failed", "partial") and not failure_summary:
+                failure_summary = (
+                    failure_summary_from_query_notes(payload_string(payload, "notes"))
+                    or f"query_run_status={outcome.status}"
+                )
+            recovery_status = args.recovery_status or automation_recovery_default(status)
+            validate_automation_recovery_status(status, recovery_status)
+            validate_automation_failure_evidence(
+                status,
+                failure_count=failure_count,
+                failure_summary=failure_summary,
+                recovery_notes=args.recovery_notes,
+            )
+            cursor = connection.execute(
+                """
+                INSERT INTO automation_runs(
+                    source, scope, status, started_at, ended_at, result_count,
+                    failure_count, created_action_count, created_artifact_count,
+                    created_query_run_count, failure_summary, action_ids,
+                    artifact_ids, query_run_ids, notes, recovery_status,
+                    recovery_notes, raw_source_reference, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    args.source,
+                    pack.name,
+                    status,
+                    started_at,
+                    ended_at,
+                    outcome.result_count,
+                    failure_count,
+                    1 if outcome.import_state == "created" else 0,
+                    failure_summary,
+                    str(outcome.query_run_id),
+                    "prepared query run only; accepted-job creation remains manual",
+                    recovery_status,
+                    args.recovery_notes,
+                    outcome.raw_source_reference,
+                    now,
+                    now,
+                ),
+            )
+            automation_run_id = int(cursor.lastrowid)
+
+    print_query_import_outcome(outcome)
+    print(
+        f"automation query run prepared id={automation_run_id} "
+        f"source={args.source} pack={pack.name} status={status} "
+        f"query_run_id={outcome.query_run_id} recovery={recovery_status}"
+    )
+    return 0
 
 
 def automation_rows(
@@ -8436,6 +8585,23 @@ def parse_args() -> argparse.Namespace:
     )
     automation_poll.add_argument("--company")
     automation_poll.add_argument("--source-id", type=positive_int, action="append")
+    automation_prepare_query_run = automation_subparsers.add_parser(
+        "prepare-query-run",
+        help="Prepare and record an approved broad-source query run.",
+    )
+    automation_prepare_query_run.add_argument("--source", choices=QUERY_SOURCES, required=True)
+    automation_prepare_query_run.add_argument("--pack", required=True)
+    automation_prepare_query_run.add_argument("--file", required=True)
+    automation_prepare_query_run.add_argument(
+        "--reason",
+        help="Required for exception packs such as ACCESS.",
+    )
+    automation_prepare_query_run.add_argument("--started-at")
+    automation_prepare_query_run.add_argument("--ended-at")
+    automation_prepare_query_run.add_argument("--failure-count", type=non_negative_int, default=0)
+    automation_prepare_query_run.add_argument("--failure-summary")
+    automation_prepare_query_run.add_argument("--recovery-status", choices=AUTOMATION_RECOVERY_STATUSES)
+    automation_prepare_query_run.add_argument("--recovery-notes")
     automation_list = automation_subparsers.add_parser(
         "list", help="List automation run history."
     )
@@ -8883,6 +9049,8 @@ def main() -> int:
                 return command_automation_record(args)
             if args.automation_command == "poll-targets":
                 return command_automation_poll_targets(args)
+            if args.automation_command == "prepare-query-run":
+                return command_automation_prepare_query_run(args)
             if args.automation_command == "list":
                 return command_automation_list(args)
             if args.automation_command == "review":

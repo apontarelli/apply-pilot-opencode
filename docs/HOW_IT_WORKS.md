@@ -50,6 +50,7 @@ python3 scripts/job_search.py query show <query_run_id>
 python3 scripts/job_search.py query packs list --default-only
 python3 scripts/job_search.py query packs show FINTECH
 python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --limit 25
+python3 scripts/job_search.py automation prepare-query-run --source linkedin_mcp --pack FINTECH --file APPLICATIONS/_ops/query-runs/fintech-linkedin.json
 python3 scripts/linkedin_mcp_query_handoff.py prepare --pack FINTECH --query-index 1 --search-json APPLICATIONS/_ops/query_runs/linkedin-search.json --details-json APPLICATIONS/_ops/query_runs/linkedin-details.json --output APPLICATIONS/_ops/query-runs/fintech-linkedin.json --import
 python3 scripts/job_search.py job add --company "Company" --title "Senior Product Manager" --source manual
 python3 scripts/job_search.py job list --company "Company"
@@ -484,6 +485,7 @@ payloads:
 python3 scripts/job_search.py automation record --source linkedin_mcp --scope FINTECH --status partial --started-at 2026-04-27T10:00:00+00:00 --ended-at 2026-04-27T10:04:00+00:00 --result-count 3 --failure-count 1 --failure-summary rate_limited --query-run-id 12 --notes "normalized rows imported; raw payload stayed local"
 python3 scripts/job_search.py automation poll-targets --company "Company"
 python3 scripts/job_search.py automation poll-targets --source-id 12 --source-id 13
+python3 scripts/job_search.py automation prepare-query-run --source linkedin_mcp --pack FINTECH --file APPLICATIONS/_ops/query-runs/fintech-linkedin.json
 python3 scripts/job_search.py automation review
 python3 scripts/job_search.py automation recover <run_id> retry --notes "retry with smaller limit"
 ```
@@ -502,6 +504,15 @@ created screen actions in `action_ids` and appends the run ID to those action
 notes for review. If one source fails while another succeeds, the run is
 `partial`; if all selected sources fail, it is `failed`; both states appear in
 `automation review` until recovered.
+
+`automation prepare-query-run` is the approved preparation-only path for broad
+source packages that already have a normalized query-import JSON payload. It
+enforces the same source list and query-pack guardrails as `query run`, imports
+the query run before any review or acceptance work, and records one linked
+`automation_runs` row with `query_run_ids` evidence. Exception packs such as
+`ACCESS` still require `--reason`. The command creates no jobs, actions, or
+artifacts; operators must review `query_run_results` and accept jobs through a
+separate command-center step.
 
 Evidence expectations:
 
@@ -622,6 +633,7 @@ python3 scripts/job_search.py query packs list --default-only
 python3 scripts/job_search.py query packs show FINTECH
 python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --limit 25
 python3 scripts/job_search.py query run --source manual_browser --pack ACCESS --reason "specific access/trust target role"
+python3 scripts/job_search.py automation prepare-query-run --source linkedin_mcp --pack FINTECH --file APPLICATIONS/_ops/query-runs/fintech-linkedin.json
 python3 scripts/job_search.py report query-pack-tuning
 ```
 
