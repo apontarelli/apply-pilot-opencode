@@ -30,6 +30,20 @@
       ]
     },
     {
+      "name": "GROWTH_BUSINESS_SYSTEMS",
+      "label": "Growth / Business Systems",
+      "default_repeatable": true,
+      "description": "Repeatable volume lane for product-led growth, monetization, lifecycle, onboarding, pricing, experimentation, reporting, and workflow-conversion roles where Antonio can use systems and operational proof.",
+      "queries": [
+        "senior product manager growth b2b",
+        "senior product manager monetization",
+        "senior product manager lifecycle",
+        "senior product manager onboarding activation",
+        "senior product manager pricing packaging",
+        "product manager experimentation platform"
+      ]
+    },
+    {
       "name": "ACCESS",
       "label": "Access / Trust Workflow",
       "default_repeatable": false,

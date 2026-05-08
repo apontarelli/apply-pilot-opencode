@@ -21,7 +21,7 @@ Treat `docs/PRODUCT_STRATEGY.md` as the product source of truth. Treat
 
 - Source of truth: SQLite at `APPLICATIONS/_ops/job_search.sqlite`.
 - Primary workflow: company-first, queue-based execution.
-- Default discovery lanes: `FINTECH` / platform and `AI` / workflow.
+- Default discovery lanes: `FINTECH` / platform, `AI` / workflow, and `GROWTH_BUSINESS_SYSTEMS`.
 - Exception lanes require a specific role or target-company reason.
 - LinkedIn is a discovery source, not the source of truth.
 - Prefer Greenhouse, Lever, and Ashby APIs before official career-page browsing.

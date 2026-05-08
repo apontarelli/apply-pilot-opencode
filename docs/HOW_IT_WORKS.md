@@ -12,7 +12,7 @@ live in [Product Strategy](PRODUCT_STRATEGY.md).
 - Control layer: `scripts/job_search.py`.
 - Source of truth: SQLite at `APPLICATIONS/_ops/job_search.sqlite`.
 - Primary workflow: company-first, queue-based execution.
-- Default search lanes: FINTECH / platform PM and AI workflow PM.
+- Default search lanes: FINTECH / platform PM, AI workflow PM, and growth / business systems PM.
 - Exception lanes: ACCESS / trust workflow, media platform, industrial/autonomy, and other variants only when a specific role or target-company source warrants them.
 - Automation posture: manual-first with assistive automation.
 - LinkedIn posture: useful discovery source, not the source of truth.
@@ -456,7 +456,7 @@ Use two repeatable discovery motions:
   - run configured official ATS sources through `source` and `poll`
   - use official career pages only as manual/browser fallback
 - Query-pack-first within broad source adapters:
-  - run explicit FINTECH and AI packs from `config/job_search_query_packs.json` against LinkedIn MCP or another broad board source
+  - run explicit FINTECH, AI, and GROWTH_BUSINESS_SYSTEMS packs from `config/job_search_query_packs.json` against LinkedIn MCP or another broad board source
   - keep ACCESS and other variants as role-specific exception packs
   - record one query run per source and pack before accepting or rejecting jobs
   - validate promising broad-source hits through the canonical posting before adding them as jobs
@@ -474,7 +474,7 @@ Broad discovery runs should become durable records before jobs are accepted into
 Minimum fields:
 
 - source, such as `linkedin_mcp`, `official_company_page`, `ats_greenhouse`, `ats_lever`, `ats_ashby`, or `manual_browser`
-- query pack: `FINTECH`, `AI`, or an explicitly justified exception pack
+- query pack: `FINTECH`, `AI`, `GROWTH_BUSINESS_SYSTEMS`, or an explicitly justified exception pack
 - query text or query pack item
 - sort mode when available
 - run status: `completed`, `partial`, or `failed`
@@ -687,6 +687,7 @@ The default repeatable broad-search packs are:
 
 - FINTECH / platform
 - AI / workflow
+- GROWTH_BUSINESS_SYSTEMS / growth and business systems
 
 ACCESS and other variants are exception packs. They are valid for specific access/trust roles or target-company exceptions, but they are not default broad-search lanes.
 

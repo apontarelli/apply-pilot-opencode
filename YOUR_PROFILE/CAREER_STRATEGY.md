@@ -16,7 +16,7 @@ Antonio's highest-upside long-term direction:
 - Speed, coordination, operator workflows, and human-plus-machine systems over pure process PM work
 
 Bridge thesis:
-- Near-term: win roles in AI systems, workflow systems, and fintech/platform PM
+- Near-term: win roles in AI systems, workflow systems, fintech/platform PM, and growth/business-systems PM
 - Mid-term: use that proof to pivot into physical-world automation and autonomy software
 - Opportunistic adjacency: pursue crypto infrastructure roles only when they are really trust/controls/reporting/ops-platform problems rather than trading-core problems
 
@@ -51,6 +51,7 @@ Default rule:
 - `win_now_fit` outranks `company_pull` for apply-now decisions
 - loved-company stretch roles become campaigns unless the specific JD clears the recruiter screen
 - do not let domain fit or company excitement hide a formal level, title, PM-years, or direct-proof gap
+- in the current employer-favored market, low-effort volume outranks perfect pre-filtering when the story is honest
 
 ---
 
@@ -99,8 +100,15 @@ Hard-screen risk:
 - direct payments rail, API/devtools, autonomy, robotics, industrial, or trading-core expertise required without a bridge
 
 Default:
-- do not cold-apply to a hard-screen role just because the company is exciting
-- route it to `stretch_warm_path`, `portfolio_gap`, `watch`, or `pass`
+- do not spend heavy customization time on a hard-screen role unless there is a warm path or unusually strong fit
+- cold-apply to 6-7+ year roles as `low_effort_apply` when the resume story is honest, compensation/location are acceptable, and no fake domain or title claim is required
+- route true literal-prior-title screens, people-management-first roles, and fake-story roles to `stretch_warm_path`, `portfolio_gap`, `watch`, or `pass`
+- classify likely misses as `recruiter_screen_risk` or `level_scope_mismatch` so the command center can learn from them
+
+Truth boundary:
+- OK: date ranges that honestly reflect employment periods, e.g. `2020-2025` when accurate
+- OK: "staff-level scope" when backed by cross-org ownership and business-critical outcomes
+- Not OK: claiming 7+ formal PM years, staff/principal/group titles, engineering ownership, shipped AI adoption, or domain-native expertise that did not happen
 
 ---
 
@@ -133,6 +141,8 @@ Current gaps to track without overstating:
 - API / devtools product ownership
 - 7-8 years formal PM
 - AI-native shipped adoption
+- real external user traction for AI-enabled or film/TV workflow tools
+- reusable STAR story evidence for strategic judgment, conflict, pivots, and technical trade-offs
 - industrial / autonomy / robotics domain proof
 - crypto trading-core or protocol-native expertise
 
@@ -197,7 +207,34 @@ Target company archetypes:
 
 ---
 
-### 3. INDUSTRIAL / AUTONOMY SYSTEMS PM
+### 3. GROWTH / BUSINESS SYSTEMS PM
+
+Why this lane:
+- Adds application volume without abandoning the strongest proof base
+- Growth skills transfer to future founder work: activation, monetization, lifecycle, experimentation, and distribution judgment
+- Antonio's reporting, accounting, onboarding, and platform work can credibly map to business outcomes when the role is not purely consumer-growth theater
+
+Resume:
+- `YOUR_PROFILE/Fintech/FINTECH.md` by default
+- `YOUR_PROFILE/AI/AI.md` only when the growth surface is AI workflow, automation, or lifecycle intelligence
+
+Use for:
+- B2B growth PM
+- monetization, pricing, packaging, lifecycle, onboarding, retention, activation, and workflow conversion
+- internal growth systems, experimentation platforms, reporting, analytics, and revenue operations tooling
+- media or creator/platform growth when the workflow problem is real
+
+Avoid by default:
+- adtech/media-buying depth as the center of gravity
+- pure consumer growth roles requiring deep paid acquisition, virality, SEO, or brand campaign ownership
+- roles where growth means only performance marketing or top-of-funnel demand generation
+
+Role thesis:
+- Systems-oriented PM who improves business outcomes by turning operational insight, workflow friction, and data loops into product leverage
+
+---
+
+### 4. INDUSTRIAL / AUTONOMY SYSTEMS PM
 
 Why this lane:
 - Highest long-term upside
@@ -224,6 +261,7 @@ Important constraint:
 - Generic PM leadership language
 - Pure design systems as the main career bet
 - Consumer AI or thin AI wrappers
+- generic consumer growth or performance-marketing-first PM roles
 - Resume polishing without application volume
 
 ## INTEREST FILTERS
@@ -239,10 +277,11 @@ High-interest work:
 Medium-interest work:
 - payments, insurance, and crypto trust/controls roles with a clear workflow-software center
 - workflow-heavy enterprise software in adjacent regulated or operational domains
+- B2B growth, monetization, pricing, lifecycle, and onboarding roles where the work is product-led and systems-heavy
 - selective media/creative-ops software when the workflow problem is real and the company quality is strong
 
 Low-interest or default-pass work:
-- consumer growth PM
+- generic consumer growth PM
 - adtech/media buying depth as the center of gravity
 - pure design systems
 - people-management-first roles
@@ -258,6 +297,11 @@ Default company/problem preference:
 
 Default location preference:
 - remote-friendly U.S. roles first
+
+Compensation posture:
+- optimize for income continuity, learning trajectory, and role quality before perfect compensation in the current market
+- keep senior-market compensation as the preference, but do not auto-pass bridge roles solely because they are below prior compensation
+- require an explicit bridge reason for major pay cuts: brand value, internal mobility, domain proof, strong manager, or clear path back to stronger roles
 - downgrade roles with hard timezone requirements that exclude Los Angeles
 - downgrade hybrid roles unless the company/problem quality is unusually strong
 

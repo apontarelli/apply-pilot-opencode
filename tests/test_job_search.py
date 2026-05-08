@@ -2464,6 +2464,8 @@ class JobSearchDatabaseTests(unittest.TestCase):
                 [
                     "FINTECH\tdefault\trepeatable\tqueries=6\tFintech / Platform",
                     "AI\tdefault\trepeatable\tqueries=6\tAI / Workflow",
+                    "GROWTH_BUSINESS_SYSTEMS\tdefault\trepeatable\t"
+                    "queries=6\tGrowth / Business Systems",
                 ],
             )
             self.assertNotIn("ACCESS", result.stdout)
@@ -2492,6 +2494,13 @@ class JobSearchDatabaseTests(unittest.TestCase):
                                 "queries": ["senior product manager ai workflow"],
                             },
                             {
+                                "name": "GROWTH_BUSINESS_SYSTEMS",
+                                "label": "Growth / Business Systems",
+                                "default_repeatable": True,
+                                "description": "Default lane.",
+                                "queries": ["senior product manager growth b2b"],
+                            },
+                            {
                                 "name": "ACCESS",
                                 "label": "Access / Trust Workflow",
                                 "default_repeatable": True,
@@ -2506,7 +2515,8 @@ class JobSearchDatabaseTests(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                "Default repeatable query packs must be exactly AI and FINTECH",
+                "Default repeatable query packs must be exactly AI, FINTECH, "
+                "and GROWTH_BUSINESS_SYSTEMS",
             ):
                 JOB_SEARCH.load_query_pack_registry(registry_path)
 
@@ -2530,6 +2540,13 @@ class JobSearchDatabaseTests(unittest.TestCase):
                                 "default_repeatable": True,
                                 "description": "Default lane.",
                                 "queries": [""],
+                            },
+                            {
+                                "name": "GROWTH_BUSINESS_SYSTEMS",
+                                "label": "Growth / Business Systems",
+                                "default_repeatable": True,
+                                "description": "Default lane.",
+                                "queries": ["senior product manager growth b2b"],
                             },
                         ]
                     }

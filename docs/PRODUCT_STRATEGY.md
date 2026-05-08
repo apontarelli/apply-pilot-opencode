@@ -43,7 +43,7 @@ For every serious role or target company, the system should answer:
 - Strategy source: this document.
 - Operating-model source: `docs/HOW_IT_WORKS.md`.
 - Primary workflow: company-first, queue-based execution.
-- Default discovery lanes: FINTECH / platform PM and AI workflow PM.
+- Default discovery lanes: FINTECH / platform PM, AI workflow PM, and growth / business systems PM.
 - Exception lanes: ACCESS / trust workflow, payments / insurance / crypto trust, media platform, industrial / autonomy bridge, and other variants only when a specific role or target-company reason warrants them.
 - Skill workflow: `$career-command-center` runs the daily operator loop; `$job-search` screens and normalizes roles; `$job-apply` routes ready JDs to the best resume lane and application materials.
 - Automation posture: manual-first with assistive automation.
@@ -141,7 +141,7 @@ For known target companies:
 
 For broader discovery:
 
-1. Use default FINTECH and AI query packs.
+1. Use default FINTECH, AI, and GROWTH_BUSINESS_SYSTEMS query packs.
 2. Use exception packs only with an explicit reason.
 3. Record query runs before accepting roles into the command center.
 4. Validate promising results through detail pages or canonical postings.
@@ -244,7 +244,7 @@ Status: shipped baseline.
 Status: shipped baseline.
 
 - Query packs are machine-readable in `config/job_search_query_packs.json`.
-- FINTECH and AI are default repeatable packs.
+- FINTECH, AI, and GROWTH_BUSINESS_SYSTEMS are default repeatable packs.
 - ACCESS and other variants require an explicit exception reason.
 - Query runs can be imported, listed, and inspected.
 - Query run results preserve accepted, rejected, duplicate, noisy, and failure outcomes.

@@ -23,7 +23,7 @@ This file is not for:
 - Default resume for active applications: `YOUR_PROFILE/Fintech/FINTECH.md`
 - Access / trust workflow resume: `YOUR_PROFILE/Access/ACCESS.md`
 - Secondary resume for targeted applications: `YOUR_PROFILE/AI/AI.md`
-- Daily application target: `5` fintech/platform applications per weekday
+- Daily application target: `5` applications per weekday across `ready_to_apply` and `low_effort_apply`
 - Weekly target: `25`
 - Do not pause applications while building new resume variants
 - Default Codex entrypoint for live applications: `$job-apply`
@@ -33,10 +33,13 @@ Current build order:
 1. Apply with `FINTECH.md`
 2. Use `ACCESS.md` for identity, access management, employee onboarding/offboarding, access reviews, compliance operations, and trust-management workflow roles
 3. Use `AI.md` selectively for strong-fit AI workflow / operator systems roles
-4. Use Hard Sets AI workout import selectively as demoable pre-launch AI proof
-5. Ship Hard Sets AI coach to deepen AI-native product proof further
-6. Research physical-world automation segments
-7. Build `INDUSTRIAL_SYSTEMS.md`
+4. Use `FINTECH.md` for B2B growth/business-systems roles when the role centers on activation, monetization, lifecycle, onboarding, pricing, reporting, experimentation, or workflow conversion
+5. Use Hard Sets AI workout import selectively as demoable pre-launch AI proof
+6. Build and launch a film/TV workflow tool only if it can reach real users from Antonio's network
+7. Draft and rehearse 6-8 STAR stories from `YOUR_PROFILE/STAR_STORY_BANK.md`
+8. Ship Hard Sets AI coach to deepen AI-native product proof further
+9. Research physical-world automation segments
+10. Build `INDUSTRIAL_SYSTEMS.md`
 
 ---
 
@@ -55,6 +58,8 @@ Counts:
 
 Cadence:
 - `5` applications per weekday
+- `25` applications per week
+- default mix over a full week: mostly low-effort volume, with customization reserved for genuinely high-signal roles
 
 Done means:
 - submitted application, or a role is ready for Antonio to submit with exact link, resume, and required materials
@@ -221,6 +226,10 @@ Rules:
 - every `ready_to_apply` handoff shown to Antonio must include the job link, not just saved file paths
 - every `ready_to_apply` handoff shown to Antonio must include the resume to use and any app-specific materials to review
 - interest level and comp signal are real gates, not optional commentary
+- do not self-filter only because a role asks for 6-7+ years when the story is honest and the submit cost is low
+- apply 1-2 levels above and below the target band when compensation, location, and interest are acceptable
+- include associate PM roles only when the brand, learning trajectory, internal mobility, or domain make the step-down rational
+- classify likely misses with comparable reasons such as `recruiter_screen_risk` or `level_scope_mismatch`
 
 Low-effort apply rule:
 - if a role is good enough to submit now with an existing base resume, it should be `ready_to_apply`, not `watch`
@@ -228,6 +237,22 @@ Low-effort apply rule:
 - record `low_effort_apply` in `jobs.screen_bucket` when the right move is: existing resume, no custom cover letter, and only minimal QA if the form forces text fields
 - default low-effort apply shape: medium-or-better interest, geo good enough, comp not clearly weak, and no fake story required
 - `low_effort_apply` counts toward the daily and weekly application target
+
+Broad-volume rule:
+- 6-7+ year postings can be low-effort applications when they do not require literal prior staff/principal/group/director title, people management, or false domain expertise
+- do not write custom cover letters, bespoke resumes, or long answers for obvious seniority-screen risks unless there is a warm path or exceptional role fit
+- use base resume variants and preserve truthful wording; avoid stuffing AI keywords or overstating AI-native shipped adoption
+
+Growth/business-systems rule:
+- use this as a volume lane when the work is product-led growth, monetization, pricing, lifecycle, onboarding, activation, retention, experimentation, reporting, or revenue/workflow operations
+- default resume is `YOUR_PROFILE/Fintech/FINTECH.md`
+- default-pass generic consumer growth, paid acquisition, SEO, adtech, brand campaign, or performance-marketing-first roles
+
+Interview prep rule:
+- maintain `YOUR_PROFILE/STAR_STORY_BANK.md` as the canonical story source
+- lead with Wrapbook and corporate operating stories
+- use Hard Sets or film/TV tools as supporting proof of AI fluency, discovery, and building speed
+- before each serious interview, pick 6-8 stories and rehearse both 90-second and 4-minute versions
 
 ### LinkedIn MCP intake
 
@@ -259,12 +284,14 @@ Use `YOUR_PROFILE/CAREER_STRATEGY.md` to screen for:
 - disclosed compensation quality when available
 
 Current comp rule:
-- use `180k` base as the default floor
+- use `180k` base as the preferred floor for strong-fit senior roles
 - treat `205k-225k` base as the target band
 - treat `230k+` base as premium / stretch comp
 - missing comp should not block a role by itself
 - clearly weak disclosed comp should usually block `ready_to_apply`
-- disclosed comp below `180k` should usually be `pass` unless the role is unusually compelling
+- disclosed comp below `180k` should usually be `low_effort_apply`, `watch`, or `pass` depending on learning trajectory, brand, role quality, and runway value
+- disclosed comp below `150k` needs a clear bridge reason: income continuity, exceptional learning, strong brand, internal mobility, or unusually relevant domain proof
+- do not let compensation optimization block application volume in the current employer-favored market
 
 ### AI lane routing
 

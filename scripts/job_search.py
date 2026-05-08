@@ -1475,9 +1475,10 @@ def load_query_pack_registry(
         )
 
     default_names = {pack.name for pack in packs.values() if pack.default_repeatable}
-    if default_names != {"AI", "FINTECH"}:
+    if default_names != {"AI", "FINTECH", "GROWTH_BUSINESS_SYSTEMS"}:
         raise ValueError(
-            "Default repeatable query packs must be exactly AI and FINTECH"
+            "Default repeatable query packs must be exactly AI, FINTECH, "
+            "and GROWTH_BUSINESS_SYSTEMS"
         )
 
     return packs
@@ -1510,7 +1511,7 @@ def validate_query_pack_run(pack: QueryPack, reason: str | None) -> str | None:
     if not normalized_reason:
         raise ValueError(
             f"Query pack {pack.name} is an exception pack. Broad query runs with "
-            f"non-FINTECH/AI packs require --reason."
+            f"non-default packs require --reason."
         )
     return normalized_reason
 

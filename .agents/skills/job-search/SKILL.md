@@ -15,8 +15,9 @@ status, metrics, outcomes, stale actions, or command-center hygiene.
 
 1. Find roles aligned to current lanes:
    - `FINTECH`
-   - `ACCESS`
    - `AI`
+   - `GROWTH_BUSINESS_SYSTEMS`
+   - `ACCESS` only as an exception lane
 2. Filter out low-signal roles quickly.
 3. Turn LinkedIn job posts into normalized JD text.
 4. Gather light company and people context for later outreach.
@@ -42,6 +43,7 @@ Use the registry-backed CLI before broad discovery:
 - `python3 scripts/job_search.py query packs list --default-only`
 - `python3 scripts/job_search.py query packs show FINTECH`
 - `python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --limit 25`
+- `python3 scripts/job_search.py query run --source manual_browser --pack GROWTH_BUSINESS_SYSTEMS --limit 25`
 - `python3 scripts/job_search.py query run --source manual_browser --pack ACCESS --reason "specific access/trust target role"`
 
 Use `docs/HOW_IT_WORKS.md#automation-approval-boundary` as the durable
@@ -87,7 +89,8 @@ Default search motion:
 1. Source-first target-company research, import, and ATS polling.
 2. `FINTECH` / `PLATFORM`
 3. `AI` / `WORKFLOW`
-4. `INDUSTRIAL` / `AUTONOMY` only when the user explicitly wants exploratory bridge roles
+4. `GROWTH_BUSINESS_SYSTEMS`
+5. `INDUSTRIAL` / `AUTONOMY` only when the user explicitly wants exploratory bridge roles
 
 Primary lane:
 - `FINTECH` / `PLATFORM`
@@ -99,6 +102,12 @@ Selective lane:
 - search when the role centers on orchestration, operator tooling, structured outputs, evals, guardrails, or high-trust AI workflows
 - default resume lane: `YOUR_PROFILE/AI/AI.md`
 
+Volume lane:
+- `GROWTH_BUSINESS_SYSTEMS`
+- search when the role centers on product-led growth, monetization, lifecycle, onboarding, pricing, experimentation, reporting, or workflow conversion
+- default resume lane: `YOUR_PROFILE/Fintech/FINTECH.md`
+- pass or down-rank paid acquisition, SEO, brand campaign, adtech, or performance-marketing-first roles
+
 Bridge categories that still route through `FINTECH` unless the JD clearly says otherwise:
 - payments operations
 - insurance / claims workflows
@@ -107,7 +116,8 @@ Bridge categories that still route through `FINTECH` unless the JD clearly says 
 
 Low-priority or default-pass:
 - pure people-management roles
-- consumer growth PM
+- generic consumer growth PM
+- paid acquisition, SEO, brand campaign, adtech, or performance-marketing-first growth PM
 - ML infra, model research, or data-science platform roles
 - pure design systems as the main story
 - direct robotics, AV, or hardware-native roles without a credible software-systems bridge
@@ -129,7 +139,8 @@ Default behavior:
 - high interest + acceptable risk can become `ready_to_apply`
 - medium interest usually needs stronger fit or stronger comp to become `ready_to_apply`
 - low interest should usually be `pass` unless the role is an unusually strong bridge
-- disclosed comp below `180k` base should usually be `pass`
+- disclosed comp below `180k` base should usually be `low_effort_apply`, `watch`, or `pass` depending on learning trajectory, brand, role quality, and runway value
+- disclosed comp below `150k` needs a clear bridge reason
 - `180k-204k` base should usually need high interest, strong scope, or unusually good upside
 - `205k-225k` base is the target band
 - `230k+` base is strong comp support

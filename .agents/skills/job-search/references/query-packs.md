@@ -8,7 +8,7 @@ Machine-readable source of truth: `config/job_search_query_packs.json`. Use the 
 - `python3 scripts/job_search.py query run --source linkedin_mcp --pack FINTECH --limit 25`
 - `python3 scripts/job_search.py query run --source manual_browser --pack ACCESS --reason "specific access/trust target role"`
 
-Default repeatable broad-search packs are `FINTECH` and `AI`. Exception packs such as `ACCESS`, `PAYMENTS_INSURANCE_CRYPTO_TRUST`, and `INDUSTRIAL_AUTONOMY_BRIDGE` require `--reason` on broad query runs and are not default v1 lanes.
+Default repeatable broad-search packs are `FINTECH`, `AI`, and `GROWTH_BUSINESS_SYSTEMS`. Exception packs such as `ACCESS`, `PAYMENTS_INSURANCE_CRYPTO_TRUST`, and `INDUSTRIAL_AUTONOMY_BRIDGE` require `--reason` on broad query runs and are not default v1 lanes.
 
 ## Title Bands
 
@@ -71,6 +71,28 @@ Weak result pattern:
 - generic `AI product manager` titles with little workflow specificity
 - model training, ML infra, or research-heavy roles
 - consumer AI growth roles
+
+## Default Volume Pack: Growth / Business Systems
+
+Use for broader application volume when the role is product-led and systems-heavy.
+
+Queries:
+- `senior product manager growth b2b`
+- `senior product manager monetization`
+- `senior product manager lifecycle`
+- `senior product manager onboarding activation`
+- `senior product manager pricing packaging`
+- `product manager experimentation platform`
+
+Good result pattern:
+- B2B growth, activation, monetization, lifecycle, onboarding, pricing, packaging, retention, or workflow conversion
+- experimentation, reporting, analytics, or revenue/workflow operations tooling
+- roles where Antonio can map reporting, accounting, onboarding, platform, and operational systems proof to business outcomes
+
+Weak result pattern:
+- paid acquisition, SEO, performance marketing, brand campaigns, or adtech/media-buying as the center of gravity
+- generic consumer growth without a workflow, systems, or operator-software angle
+- roles requiring deep growth-marketing channel ownership rather than product judgment
 
 ## Exception Pack: Access / Trust Workflow
 
@@ -149,7 +171,8 @@ Yellow flags:
 Red flags:
 - `senior manager, product management` or similar titles that likely imply direct reports
 - people-management first
-- consumer growth first
+- generic consumer growth first
+- paid acquisition, SEO, or performance-marketing first
 - ML infra or research first
 - title/company metadata is malformed
 - domain moat depends on experience Antonio cannot claim truthfully
