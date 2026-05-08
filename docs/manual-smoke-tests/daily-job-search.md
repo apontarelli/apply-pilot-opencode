@@ -59,6 +59,21 @@ Source of truth: `APPLICATIONS/_ops/job_search.sqlite`.
   the safe next choice. Do not retry, skip, or resolve a run unless the operator
   explicitly chose that recovery action.
 
+- [ ] Produce a balanced daily todo list:
+
+  ```text
+  Screen: 5 highest-signal roles from screen queue
+  Apply: 5 ready_to_apply / low_effort_apply roles
+  Intake: paste direct LinkedIn/ATS URLs for $job-search
+  Source coverage: verify/add 3-5 ATS sources
+  Hygiene: classify stale applied/interviewing/rejected outcomes for 10 minutes
+  Proof: advance one artifact/interview-prep action when useful
+  ```
+
+  Evidence on failure: capture which queue or handoff surface is empty or
+  blocked. Stale follow-ups should not crowd out screening and application
+  volume.
+
 ## Post-Session
 
 - [ ] Review funnel and hygiene metrics:

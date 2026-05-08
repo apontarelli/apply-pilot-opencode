@@ -64,6 +64,58 @@ When presenting job-specific next actions, always include the job URL from the
 command output or job record. If no URL is stored, say `url=missing` and make
 capturing the canonical link part of the next action.
 
+## Daily Strategy Loop
+
+When the user asks for the daily job-search loop, fresh start, today's todos, or
+what to do next, produce a balanced operating list instead of only the oldest
+queued action.
+
+Read:
+
+```bash
+python3 scripts/job_search.py status
+python3 scripts/job_search.py action next --queue screen --limit 10
+python3 scripts/job_search.py action next --queue apply --limit 10
+python3 scripts/job_search.py action next --queue research --limit 10
+python3 scripts/job_search.py action next --queue artifact --limit 5
+python3 scripts/job_search.py action next --queue classify --limit 10
+python3 scripts/job_search.py automation review
+python3 scripts/job_search.py metrics
+```
+
+Default daily todo mix:
+
+1. `Screen`: screen up to 5 highest-signal roles from the `screen` queue.
+2. `Apply`: submit or prepare up to 5 `ready_to_apply` / `low_effort_apply`
+   roles from the `apply` queue.
+3. `Intake`: ask Antonio to paste direct LinkedIn, Greenhouse, Lever, or Ashby
+   job URLs gathered manually; route the pasted batch to `$job-search`.
+4. `Source coverage`: add or verify 3-5 ATS sources for active tier 1/tier 2
+   companies; route live source discovery to `$job-search` when browser or web
+   validation is needed.
+5. `Outcome hygiene`: spend 10 minutes clearing stale `classify` or
+   `follow_up` items, prioritizing old `applied` / `interviewing` jobs.
+6. `Proof`: advance one `artifact` action when interview prep or reusable proof
+   is currently the bottleneck.
+
+Present these as a short checklist with concrete action IDs and job links when
+available. Keep stale follow-ups from crowding out screening and application
+volume. If there are no screen/apply actions, make URL intake and source
+coverage the next move. If there are ready apply actions, do not let resume
+polishing block manual submission.
+
+Suggested daily output shape:
+
+```text
+Today:
+- Screen: #123 Company / Role - <job link>
+- Apply: #88 Company / Role - resume=<path> materials=<path>
+- Intake: paste 10-20 direct LinkedIn/ATS URLs for $job-search
+- Source coverage: verify/add 3 ATS sources from tier 1/tier 2 targets
+- Hygiene: classify 5 stale applied/rejected items
+- Proof: #110 fill STAR story bank
+```
+
 ## Operating Surfaces
 
 Use `scripts/job_search.py` as the deterministic command surface.
