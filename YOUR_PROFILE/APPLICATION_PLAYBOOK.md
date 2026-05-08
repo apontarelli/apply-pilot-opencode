@@ -276,6 +276,30 @@ Default rule:
 - treat it as upstream of `$job-apply`
 - if MCP is unavailable or auth is stale, fall back to pasted JD text and keep moving
 
+### Direct URL intake
+
+Antonio may paste a list of direct job URLs into chat for `$job-search` intake.
+
+Use it for:
+- direct LinkedIn job URLs
+- canonical Greenhouse, Lever, and Ashby job URLs
+- mixed batches from LinkedIn, Google, email, or referrals
+
+Default rule:
+- direct LinkedIn job pages are acceptable intake; LinkedIn search-result scraping is not
+- the agent should open direct LinkedIn job URLs when needed, extract visible JD details, and prefer the external/canonical company apply URL when available
+- if the canonical URL is Greenhouse, Lever, or Ashby, add the ATS source so future polling can find related roles
+- if no canonical URL is available, record the role as `source=linkedin_manual`
+- do not send messages, connect with people, submit applications, or mutate LinkedIn state
+
+Pasted URL batches should end with a command-center summary:
+- jobs created
+- duplicates skipped
+- roles ignored by filter
+- new ATS sources added
+- screen actions created
+- URLs that still need manual follow-up
+
 ### Interest and comp filters
 
 Use `YOUR_PROFILE/CAREER_STRATEGY.md` to screen for:

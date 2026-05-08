@@ -642,6 +642,38 @@ Failure classes for `linkedin_mcp` query runs:
 This handoff is implemented as a local helper layered over query-run import
 support and machine-readable query packs.
 
+## Direct URL Intake
+
+Direct job URLs pasted into chat are an approved intake path.
+
+Supported direct intake:
+
+- direct LinkedIn job URLs
+- Greenhouse job URLs
+- Lever job URLs
+- Ashby job URLs
+
+Boundary:
+
+- Direct LinkedIn job pages may be opened by the agent to extract visible role
+  details and the external apply URL.
+- LinkedIn search result pages, pagination, recommendation surfaces, and broad
+  scraping are not a default discovery mechanism.
+- LinkedIn remains a discovery source, not durable source of truth.
+- Canonical Greenhouse, Lever, and Ashby URLs should be preferred whenever a
+  direct LinkedIn job page exposes them.
+
+Recording rules:
+
+- If a canonical Greenhouse, Lever, or Ashby URL is available, add or update the
+  company source and record the job from the canonical URL.
+- If no canonical apply URL is available, record the job with
+  `source=linkedin_manual` and the LinkedIn job URL.
+- Create `screen` actions for plausible roles and mark clearly irrelevant roles
+  `ignored_by_filter`.
+- Do not send messages, connect with people, submit applications, click final
+  form confirmations, or mutate LinkedIn state.
+
 ## LinkedIn MCP Handoff
 
 Use `scripts/linkedin_mcp_query_handoff.py` after Codex has called LinkedIn MCP

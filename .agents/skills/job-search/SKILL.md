@@ -62,6 +62,13 @@ discovery path.
 
 Exception packs such as `ACCESS`, `PAYMENTS_INSURANCE_CRYPTO_TRUST`, and `INDUSTRIAL_AUTONOMY_BRIDGE` require `--reason` on broad query runs. Do not treat them as default lanes.
 
+Direct pasted URL intake is valid:
+- accept lists of direct job URLs from chat
+- process canonical Greenhouse, Lever, and Ashby URLs directly through the command center
+- process direct LinkedIn job URLs by opening the job page, extracting the JD and external apply URL when present, and preferring any canonical ATS URL found there
+- do not scrape LinkedIn search result pages, pagination, recommendations, or broad result surfaces
+- do not require Antonio to manually click through every LinkedIn job URL before intake
+
 Use `scripts/job_search.py` to check history and record search decisions:
 - `python3 scripts/job_search.py init` if `status` says the database is not initialized
 - `python3 scripts/job_search.py status`
@@ -210,6 +217,47 @@ If the LinkedIn MCP is unavailable or not authenticated, say so directly and ask
 - pasted JD text
 - LinkedIn job text copied from the page
 - company and role name for a manual fit call
+
+Direct LinkedIn job URLs are still acceptable when MCP is unavailable. Use
+Chrome when the page needs Antonio's logged-in LinkedIn session. Extract only
+the visible direct job-page details needed for intake: company, title, location,
+JD text, and any external apply URL. If the page exposes a canonical
+Greenhouse, Lever, or Ashby application URL, add or update that ATS source and
+prefer the canonical URL for the job record. If no canonical apply URL is
+available, record the job as `source=linkedin_manual` with the LinkedIn URL.
+Never send messages, connect with people, submit applications, or mutate
+LinkedIn state.
+
+## Direct URL Intake
+
+Use this when Antonio pastes one or more job URLs into chat.
+
+Accepted input:
+- direct LinkedIn job URLs, such as `linkedin.com/jobs/view/...`
+- Greenhouse job URLs, such as `job-boards.greenhouse.io/<company>/jobs/<id>`
+- Lever job URLs, such as `jobs.lever.co/<company>/<id>`
+- Ashby job URLs, such as `jobs.ashbyhq.com/<company>/<id>`
+- mixed lists with notes, blank lines, or bullets
+
+Workflow:
+1. Split pasted text into URLs.
+2. Check command-center history before adding each company or role.
+3. For Greenhouse, Lever, or Ashby URLs:
+   - infer ATS type and source key from the URL
+   - verify the source endpoint when the source is not already configured
+   - add the ATS source when verified
+   - add or dedupe the job through `scripts/job_search.py`
+4. For direct LinkedIn job URLs:
+   - open the direct job page; use Chrome when auth is needed
+   - extract company, title, location, JD text, and external apply URL if visible
+   - prefer a canonical ATS URL when one is exposed
+   - otherwise record `source=linkedin_manual` with the LinkedIn job URL
+5. Create or preserve a `screen` action for plausible roles.
+6. Mark clearly irrelevant roles `ignored_by_filter` with bucket `pass`.
+7. Summarize created jobs, duplicates, ignored roles, unsupported URLs, new sources, and screen actions.
+
+Do not build a separate durable URL list unless Antonio asks for one. The
+command center is the durable state.
 
 ## Querying
 
